@@ -1,4 +1,4 @@
-// ── Vegeta ASMR webview — complete frontend ───────────────────────────────
+// ── MOMMY ASMR webview — complete frontend ────────────────────────────────
 // Runs in VS Code webview context (browser-like, no Node APIs)
 
 declare function acquireVsCodeApi(): VSCodeApi;
@@ -27,7 +27,7 @@ let adviceIdx                             = 0;
 let backendUrl                            = '';
 let elevenLabsKey                         = '';
 let historyOpen                           = false;
-let isMuted                               = true;    // require user click — VS Code webviews need a gesture
+let isRecording                           = false;   // push-to-talk active
 let isProcessing                          = false;
 let typewriterTimer: ReturnType<typeof setInterval>|null = null;
 let activeRequestId                        = '';
@@ -40,10 +40,10 @@ let quoteTimer: ReturnType<typeof setInterval>|null = null;
 let audioCtx: AudioContext|null           = null;
 let analyser: AnalyserNode|null           = null;
 let mediaStream: MediaStream|null         = null;
-let recognition: InstanceType<typeof SpeechRecognition>|null = null;
+let mediaRecorder: MediaRecorder|null     = null;
+let audioChunks: Blob[]                   = [];
 let waveRaf: number|null                  = null;
 let wavePhase                             = 0;
-let isActuallyListening                   = false;
 
 // ── Ambient speech API types (supplement DOM lib gaps) ───────────────────
 interface SpeechRecognitionAlternative {
@@ -160,6 +160,7 @@ function renderApp(): void {
       </div>
 
       <div id="subtitle-box" class="subtitle-box">
+        <span id="dialogue-speaker" class="subtitle-speaker hidden"></span>
         <div id="dialogue" class="subtitle-text"></div>
       </div>
 
@@ -185,12 +186,12 @@ function renderApp(): void {
         <button id="composer-send" class="composer-send" title="Send message">Send</button>
       </div>
 
-      <!-- ── 6. Footer with quote ───────────────────────────────────── -->
-      <footer class="quote-footer">
-        <div class="quote-mark">&ldquo;</div>
-        <div id="quote-text" class="quote-text">Take your time. Enjoy coding :)</div>
+      <!-- ── 6. Inline quote (not boxed — part of the main flow) ─────── -->
+      <div class="quote-inline">
+        <span class="quote-mark">&ldquo;</span>
+        <span id="quote-text" class="quote-text">Take your time. Enjoy coding :)</span>
         <button id="quote-cycle" class="quote-cycle" title="Another quote">↻</button>
-      </footer>
+      </div>
 
     </div><!-- /main -->
   </div>
@@ -362,8 +363,25 @@ function toggleHistory(force?: boolean): void {
 }
 
 // ── Dialogue / typewriter ─────────────────────────────────────────────────
-function setDialogue(text: string, instant?: boolean): void {
+// speaker: 'user' shows "You", 'char' shows the active character's name,
+// 'system' (default) hides the label entirely.
+function setSpeaker(kind: 'user' | 'char' | 'system'): void {
+  const sp = document.getElementById('dialogue-speaker');
+  if (!sp) { return; }
+  if (kind === 'system') { sp.textContent = ''; sp.classList.add('hidden'); return; }
+  sp.classList.remove('hidden', 'speaker-user', 'speaker-char');
+  if (kind === 'user') {
+    sp.textContent = 'You';
+    sp.classList.add('speaker-user');
+  } else {
+    sp.textContent = activeChar()?.name ?? 'Companion';
+    sp.classList.add('speaker-char');
+  }
+}
+
+function setDialogue(text: string, instant?: boolean, speaker: 'user' | 'char' | 'system' = 'system'): void {
   if (typewriterTimer !== null) { clearInterval(typewriterTimer); typewriterTimer = null; }
+  setSpeaker(text ? speaker : 'system');
   const el2 = document.getElementById('dialogue');
   if (!el2) { return; }
   if (instant || !text) { el2.textContent = text; return; }
@@ -383,7 +401,7 @@ function updateAdviceNav(): void {
 function showAdvice(idx2: number): void {
   if (!adviceList.length) { return; }
   adviceIdx = Math.max(0, Math.min(idx2, adviceList.length - 1));
-  setDialogue(adviceList[adviceIdx]);
+  setDialogue(adviceList[adviceIdx], false, 'char');
   updateAdviceNav();
 }
 
@@ -473,101 +491,92 @@ function startLiveWave(): void {
   drawLive();
 }
 
-// ── Mic / recognition lifecycle ───────────────────────────────────────────
-function applyMuteUI(muted: boolean): void {
+// ── Mic / push-to-talk (MediaRecorder) ───────────────────────────────────
+function applyRecordingUI(rec: boolean): void {
+  const btn = document.getElementById('btn-mute');
+  const rip = document.getElementById('mute-ripple');
   const ico1 = document.getElementById('ico-unmuted');
   const ico2 = document.getElementById('ico-muted');
-  const btn  = document.getElementById('btn-mute');
-  const rip  = document.getElementById('mute-ripple');
-  if (ico1) { ico1.classList.toggle('hidden', muted); }
-  if (ico2) { ico2.classList.toggle('hidden', !muted); }
-  if (btn)  { btn.classList.toggle('muted', muted); }
-  if (rip)  { rip.classList.toggle('hidden', muted); }
+  if (btn)  { btn.classList.toggle('recording', rec); btn.classList.toggle('muted', false); }
+  if (rip)  { rip.classList.toggle('hidden', !rec); }
+  if (ico1) { ico1.classList.toggle('hidden', false); }
+  if (ico2) { ico2.classList.toggle('hidden', true); }
 }
 
-async function startListening(): Promise<void> {
-  if (isActuallyListening || isMuted || isProcessing) { return; }
-
-  const SpeechRecCtor: typeof SpeechRecognition|undefined =
-    (window as unknown as {SpeechRecognition?: typeof SpeechRecognition}).SpeechRecognition ??
-    (window as unknown as {webkitSpeechRecognition?: typeof SpeechRecognition}).webkitSpeechRecognition ??
-    (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition;
-
-  if (!SpeechRecCtor) {
-    // Speech API unavailable in this webview — silently switch to text-only mode
-    isMuted = true;
-    applyMuteUI(true);
-    return;
-  }
-
+async function startRecording(): Promise<void> {
+  if (isRecording || isProcessing) { return; }
+  let stream: MediaStream;
   try {
-    mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  } catch {
-    // Permission denied or no mic hardware — silently switch to text-only mode
-    isMuted = true;
-    applyMuteUI(true);
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new DOMException('mediaDevices API is unavailable in this webview', 'NotSupportedError');
+    }
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (err) {
+    const detail = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+    console.warn('[mommyasmr] getUserMedia failed:', detail);
+    vscode.postMessage({ type: 'openMicHelp', detail });
+    setDialogue(`Mic unavailable (${detail}). You can type your message instead.`, true);
+    setEmotion('sad');
     return;
   }
+  mediaStream = stream;
+  audioCtx  = new AudioContext();
+  analyser  = audioCtx.createAnalyser();
+  analyser.fftSize = 1024;
+  audioCtx.createMediaStreamSource(stream).connect(analyser);
+  startLiveWave();
 
-    const data = await response.json() as { transcript?: string; error?: string };
-
-    if (!response.ok) {
-      throw new Error(data.error || `HTTP ${response.status}`);
-    }
-
-  recognition.onerror = (ev: SpeechRecognitionError) => {
-    if (ev.error !== 'no-speech' && ev.error !== 'aborted') {
-      console.warn('Recognition error:', ev.error);
-    }
-    stopMic();
-  };
-
-  recognition.onend = () => {
-    isActuallyListening = false;
-    listenAbort = null;
-
-    if (!transcript) {
-      setDialogue('No speech detected. Try again or type below.', true);
-      setEmotion('ready');
-      return;
-    }
-
-    await handleUserSpeech(transcript);
-  } catch (error) {
-    isActuallyListening = false;
-    listenAbort = null;
-
-    if (error instanceof DOMException && error.name === 'AbortError') {
-      setDialogue('Click the mic to talk.', true);
-      setEmotion('ready');
-      return;
-    }
-
-    const message = error instanceof Error ? error.message : 'Voice capture failed.';
-    reportError(message);
-    vscode.postMessage({ type: 'openMicHelp' });
-  }
+  audioChunks = [];
+  const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+    ? 'audio/webm;codecs=opus'
+    : MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '';
+  mediaRecorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+  mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) { audioChunks.push(e.data); } };
+  mediaRecorder.onstop = () => { void onAudioRecorded(); };
+  mediaRecorder.start(100);
+  isRecording = true;
+  applyRecordingUI(true);
 }
 
-function stopMic(): void {
-  isActuallyListening = false;
-  if (listenAbort) {
-    listenAbort.abort();
-    listenAbort = null;
-  }
+function stopRecording(): void {
+  if (!isRecording) { return; }
+  isRecording = false;
+  applyRecordingUI(false);
+  try { mediaRecorder?.stop(); } catch { /* */ }
+  mediaRecorder = null;
   try { mediaStream?.getTracks().forEach(t => t.stop()); } catch { /* */ }
   mediaStream = null;
   if (audioCtx) { try { audioCtx.close(); } catch { /* */ } audioCtx = null; }
   analyser = null;
-  recognition = null;
   startIdleWave();
 }
 
-function setMuted(muted: boolean): void {
-  isMuted = muted;
-  applyMuteUI(muted);
-  if (muted) { stopMic(); }
-  else       { startListening(); }
+async function onAudioRecorded(): Promise<void> {
+  if (!audioChunks.length) { return; }
+  const blob = new Blob(audioChunks, { type: mediaRecorder?.mimeType || 'audio/webm' });
+  audioChunks = [];
+  const arrayBuf = await blob.arrayBuffer();
+  const uint8 = new Uint8Array(arrayBuf);
+  let binary = '';
+  for (let i = 0; i < uint8.length; i++) { binary += String.fromCharCode(uint8[i]); }
+  const audioBase64 = btoa(binary);
+  const editorCtx = await requestEditorContext();
+  const char = characters.find(c => c.id === activeProfileId);
+  vscode.postMessage({
+    type: 'sendAudio',
+    audioBase64,
+    mimeType: blob.type,
+    profileId: activeProfileId,
+    characterPrompt: char?.prompt ?? '',
+    voiceId: char?.voiceId ?? '',
+    characterName: char?.name ?? '',
+    conversationId: currentConvoId,
+    editorContext: editorCtx,
+    history: currentMessages.slice(-10).map(m => ({ role: m.role, content: m.content })),
+  });
+  isProcessing = true;
+  const composerInput = document.getElementById('composer-input') as HTMLTextAreaElement | null;
+  if (composerInput) { composerInput.disabled = true; }
 }
 
 // ── Editor context (one-shot request → response) ─────────────────────────
@@ -646,9 +655,7 @@ async function handleUserSpeech(text: string): Promise<void> {
   if (isProcessing || !text) { return; }
   isProcessing = true;
   setEmotion('thinking');
-  setDialogue(text, true);
-  stopMic();
-
+  setDialogue(text, true, 'user');
   if (currentConvoId) {
     vscode.postMessage({ type: 'saveMessage', conversationId: currentConvoId, role: 'user', content: text });
   }
@@ -712,7 +719,7 @@ function bindEvents(): void {
     toggleDropdown();
   });
   document.addEventListener('click', () => closeDropdown());
-  el('btn-mute').addEventListener('click', () => setMuted(!isMuted));
+  el('btn-mute').addEventListener('click', () => { if (isRecording) { stopRecording(); } else { void startRecording(); } });
   el('btn-prev').addEventListener('click', () => showAdvice(adviceIdx - 1));
   el('btn-next').addEventListener('click', () => showAdvice(adviceIdx + 1));
   el('composer-send').addEventListener('click', () => sendComposerMessage());
@@ -760,7 +767,7 @@ window.addEventListener('message', (ev) => {
       updateAdviceNav();
 
       if (adviceList.length > 0) {
-        setDialogue(adviceList[adviceIdx], true);
+        setDialogue(adviceList[adviceIdx], true, 'char');
         const lastEmotion = [...currentMessages].reverse().find(m => m.role === 'assistant' && m.emotion);
         setEmotion(lastEmotion?.emotion ?? 'ready');
       } else {
@@ -769,7 +776,7 @@ window.addEventListener('message', (ev) => {
       }
 
       startIdleWave();
-      setMuted(true);
+      applyRecordingUI(false);
       break;
     }
 
@@ -779,7 +786,7 @@ window.addEventListener('message', (ev) => {
       const emotion = String(msg.emotion ?? 'supportive');
 
       setEmotion(emotion);
-      setDialogue(clean, !clean);
+      setDialogue(clean, !clean, 'char');
       if (clean) {
         adviceList.push(clean);
         adviceIdx = adviceList.length - 1;
@@ -793,8 +800,13 @@ window.addEventListener('message', (ev) => {
 
       const audioBase64 = String(msg.audioBase64 ?? '');
       const audioMimeType = String(msg.audioMimeType ?? 'audio/mpeg');
+      const audioError = String(msg.audioError ?? '');
       if (audioBase64) {
         playAudioBase64(audioBase64, audioMimeType);
+      } else if (audioError) {
+        // Voice synthesis failed server-side — surface it instead of failing silently.
+        console.warn('[mommyasmr] voice synthesis failed:', audioError);
+        vscode.postMessage({ type: 'showError', text: `Voice unavailable: ${audioError}` });
       }
 
       const composerInput = document.getElementById('composer-input') as HTMLTextAreaElement | null;
@@ -802,7 +814,6 @@ window.addEventListener('message', (ev) => {
 
       isProcessing = false;
       activeRequestId = '';
-      if (!isMuted) { setTimeout(() => startListening(), 600); }
       break;
     }
 
@@ -814,7 +825,6 @@ window.addEventListener('message', (ev) => {
       if (composerInput) { composerInput.disabled = false; }
       isProcessing = false;
       activeRequestId = '';
-      if (!isMuted) { setTimeout(() => startListening(), 600); }
       break;
     }
 
@@ -851,7 +861,7 @@ window.addEventListener('message', (ev) => {
       adviceIdx  = adviceList.length > 0 ? adviceList.length - 1 : 0;
       updateAdviceNav();
       if (adviceList.length > 0) {
-        setDialogue(adviceList[adviceIdx], true);
+        setDialogue(adviceList[adviceIdx], true, 'char');
         const lastEmotion = [...currentMessages].reverse().find(m => m.role === 'assistant' && m.emotion);
         if (lastEmotion?.emotion) { setEmotion(lastEmotion.emotion); }
       } else {
@@ -889,4 +899,4 @@ window.addEventListener('message', (ev) => {
 renderApp();
 bindEvents();
 startIdleWave();
-setMuted(true);
+applyRecordingUI(false);

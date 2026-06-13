@@ -305,6 +305,41 @@ def transcribe_audio(wav_path: str) -> str:
     raise RuntimeError(format_gemini_error(last_error or RuntimeError("Transcription failed.")))
 
 
+def transcribe_audio_bytes(audio_bytes: bytes, mime_type: str) -> str:
+    from google.genai import types
+
+    safe_mime = mime_type if mime_type else "audio/webm"
+    client = get_gemini_client()
+    prompt = (
+        "Transcribe the spoken English in this audio clip. "
+        "Return only the transcript text with no quotes, labels, or commentary."
+    )
+    last_error: Optional[Exception] = None
+    for model in gemini_models_to_try():
+        try:
+            response = client.models.generate_content(
+                model=model,
+                contents=[
+                    types.Content(
+                        role="user",
+                        parts=[
+                            types.Part.from_bytes(data=audio_bytes, mime_type=safe_mime),
+                            types.Part.from_text(text=prompt),
+                        ],
+                    )
+                ],
+            )
+            transcript = (response.text or "").strip()
+            if transcript:
+                return transcript
+            raise RuntimeError("Gemini returned an empty transcript.")
+        except Exception as exc:
+            last_error = exc
+            continue
+
+    raise RuntimeError(format_gemini_error(last_error or RuntimeError("Transcription failed.")))
+
+
 def synthesize_speech(text: str, voice_id: str) -> Dict[str, str]:
     chosen_voice = normalize_voice_id(voice_id or DEFAULT_VOICE_ID)
     if not ELEVENLABS_API_KEY:
@@ -390,11 +425,20 @@ def respond() -> Any:
 
     payload = request.get_json(silent=True) or {}
     transcript = str(payload.get("transcript", "")).strip()
+    audio_b64 = str(payload.get("audioBase64", "")).strip()
+    audio_mime = str(payload.get("mimeType", "audio/webm")).strip() or "audio/webm"
     history = payload.get("history") or []
     editor_context = payload.get("editorContext") or {}
     character_prompt = str(payload.get("characterPrompt", "")).strip()
     character_name = str(payload.get("characterName", "")).strip()
     voice_id = str(payload.get("voiceId", "")).strip()
+
+    if not transcript and audio_b64:
+        try:
+            audio_bytes = base64.b64decode(audio_b64)
+            transcript = transcribe_audio_bytes(audio_bytes, audio_mime)
+        except Exception as exc:
+            return jsonify({"error": f"Transcription failed: {exc}"}), 500
 
     if not transcript:
         return jsonify({"text": "I did not catch that.", "emotion": "thinking"}), 400
@@ -404,6 +448,7 @@ def respond() -> Any:
         response_payload: Dict[str, Any] = {
             "text": reply.get("text", "").strip(),
             "emotion": reply.get("emotion", "supportive") or "supportive",
+            "transcript": transcript,
         }
         try:
             response_payload.update(synthesize_speech(reply["text"], voice_id))

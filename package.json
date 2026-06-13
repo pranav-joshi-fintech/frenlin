@@ -1,17 +1,17 @@
 {
-  "name": "vegetaasmr-ai",
-  "displayName": "Vegeta ASMR",
-  "description": "A voice-to-voice AI coding companion — Vegeta edition.",
+  "name": "mommyasmr-ai",
+  "displayName": "MOMMY ASMR",
+  "description": "A voice-to-voice AI coding companion.",
   "version": "0.2.0",
-  "publisher": "vegetaasmr",
+  "publisher": "mommyasmr",
   "engines": { "vscode": "^1.85.0" },
   "categories": ["Other"],
   "main": "./out/extension.js",
   "contributes": {
     "configuration": {
-      "title": "Vegeta ASMR",
+      "title": "MOMMY ASMR",
       "properties": {
-        "vegetaasmr.backendUrl": {
+        "mommyasmr.backendUrl": {
           "type": "string",
           "default": "http://127.0.0.1:5001/respond",
           "description": "Flask backend endpoint that receives transcripts and returns a response payload."
@@ -21,31 +21,31 @@
     "viewsContainers": {
       "activitybar": [
         {
-          "id": "vegetaasmr-sidebar",
-          "title": "Vegeta ASMR",
+          "id": "mommyasmr-sidebar",
+          "title": "MOMMY ASMR",
           "icon": "media/icons/sidebar-icon.svg"
         }
       ]
     },
     "views": {
-      "vegetaasmr-sidebar": [
+      "mommyasmr-sidebar": [
         {
           "type": "webview",
-          "id": "vegetaasmr.companion",
+          "id": "mommyasmr.companion",
           "name": "Companion"
         }
       ]
     },
     "commands": [
-      { "command": "vegetaasmr.openPanel",          "title": "Open Companion",             "category": "Vegeta ASMR" },
-      { "command": "vegetaasmr.newConversation",     "title": "New Conversation",           "category": "Vegeta ASMR" },
-      { "command": "vegetaasmr.deleteConversation",  "title": "Delete Conversation",        "category": "Vegeta ASMR" },
-      { "command": "vegetaasmr.toggleHistory",       "title": "Toggle Session History",     "category": "Vegeta ASMR" },
-      { "command": "vegetaasmr.switchProfile",       "title": "Switch Voice Profile",       "category": "Vegeta ASMR" },
-      { "command": "vegetaasmr.openMicSettings",      "title": "Open Microphone Settings",   "category": "Vegeta ASMR" }
+      { "command": "mommyasmr.openPanel",          "title": "Open Companion",             "category": "MOMMY ASMR" },
+      { "command": "mommyasmr.newConversation",     "title": "New Conversation",           "category": "MOMMY ASMR" },
+      { "command": "mommyasmr.deleteConversation",  "title": "Delete Conversation",        "category": "MOMMY ASMR" },
+      { "command": "mommyasmr.toggleHistory",       "title": "Toggle Session History",     "category": "MOMMY ASMR" },
+      { "command": "mommyasmr.switchProfile",       "title": "Switch Voice Profile",       "category": "MOMMY ASMR" },
+      { "command": "mommyasmr.openMicSettings",      "title": "Open Microphone Settings",   "category": "MOMMY ASMR" }
     ],
     "keybindings": [
-      { "command": "vegetaasmr.openPanel", "key": "ctrl+shift+m", "mac": "cmd+shift+m" }
+      { "command": "mommyasmr.openPanel", "key": "ctrl+shift+m", "mac": "cmd+shift+m" }
     ]
   },
   "scripts": {

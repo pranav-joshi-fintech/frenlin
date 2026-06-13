@@ -21,8 +21,8 @@ function uid(): string {
 }
 
 export class ConversationStore {
-  private readonly STORE_KEY = 'vegetaasmr.v2.conversations';
-  private readonly CUR_KEY   = 'vegetaasmr.v2.currentId';
+  private readonly STORE_KEY = 'mommyasmr.v2.conversations';
+  private readonly CUR_KEY   = 'mommyasmr.v2.currentId';
   private _convos: Map<string, Conversation>;
   private _currentId: string;
 

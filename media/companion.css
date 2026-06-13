@@ -1,8 +1,4 @@
-<<<<<<< HEAD
-/* ── Vegeta ASMR companion panel ─────────────────────────────────────────── */
-=======
-/* ── MommyASMR.ai companion panel — friendly pixel-art restyle ─────────── */
->>>>>>> b7a7f8668404b354cb86df10d6226af6061f11f2
+/* ── MOMMY ASMR companion panel ──────────────────────────────────────────── */
 
 :root {
   --accent:      #3b82f6;
@@ -44,14 +40,16 @@ body.vscode-light {
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 body {
-  background: var(--bg);
-  /* ── simple, minimal pixel-grid background ────────────────────────────── */
+  background-color: var(--bg);
+  /* ── soft, airy, wavy backdrop (replaces the old grid) ────────────────── */
   background-image:
-    radial-gradient(circle at 30% 20%, color-mix(in srgb, var(--char-color) 7%, transparent), transparent 55%),
-    radial-gradient(circle at 75% 85%, color-mix(in srgb, var(--char-color-light) 6%, transparent), transparent 60%),
-    linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
-  background-size: auto, auto, 18px 18px, 18px 18px;
+    radial-gradient(circle at 22% 12%, color-mix(in srgb, var(--char-color) 16%, transparent), transparent 45%),
+    radial-gradient(circle at 82% 80%, color-mix(in srgb, var(--char-color-light) 14%, transparent), transparent 52%),
+    radial-gradient(circle at 50% 38%, rgba(255,255,255,0.06), transparent 62%),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1200' height='800' viewBox='0 0 1200 800' preserveAspectRatio='none'%3E%3Cg fill='none' stroke='rgba(255,255,255,0.05)' stroke-width='2'%3E%3Cpath d='M0 160 C 200 80 400 240 600 160 S 1000 80 1200 160'/%3E%3Cpath d='M0 300 C 200 220 400 380 600 300 S 1000 220 1200 300'/%3E%3Cpath d='M0 440 C 200 360 400 520 600 440 S 1000 360 1200 440'/%3E%3Cpath d='M0 580 C 200 500 400 660 600 580 S 1000 500 1200 580'/%3E%3Cpath d='M0 720 C 200 640 400 800 600 720 S 1000 640 1200 720'/%3E%3C/g%3E%3C/svg%3E");
+  background-size: auto, auto, auto, cover;
+  background-position: center;
+  background-repeat: no-repeat;
   background-attachment: fixed;
   color: var(--text);
   font-family: var(--font-ui);
@@ -64,11 +62,14 @@ body {
 
 body.vscode-light {
   background-image:
-    radial-gradient(circle at 30% 20%, color-mix(in srgb, var(--char-color) 10%, transparent), transparent 55%),
-    radial-gradient(circle at 75% 85%, color-mix(in srgb, var(--char-color-light) 8%, transparent), transparent 60%),
-    linear-gradient(rgba(0,0,0,0.04) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(0,0,0,0.04) 1px, transparent 1px);
-  background-size: auto, auto, 18px 18px, 18px 18px;
+    radial-gradient(circle at 22% 12%, color-mix(in srgb, var(--char-color) 24%, transparent), transparent 45%),
+    radial-gradient(circle at 82% 80%, color-mix(in srgb, var(--char-color-light) 22%, transparent), transparent 52%),
+    radial-gradient(circle at 50% 38%, rgba(255,255,255,0.65), transparent 62%),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1200' height='800' viewBox='0 0 1200 800' preserveAspectRatio='none'%3E%3Cg fill='none' stroke='rgba(40,70,140,0.08)' stroke-width='2'%3E%3Cpath d='M0 160 C 200 80 400 240 600 160 S 1000 80 1200 160'/%3E%3Cpath d='M0 300 C 200 220 400 380 600 300 S 1000 220 1200 300'/%3E%3Cpath d='M0 440 C 200 360 400 520 600 440 S 1000 360 1200 440'/%3E%3Cpath d='M0 580 C 200 500 400 660 600 580 S 1000 500 1200 580'/%3E%3Cpath d='M0 720 C 200 640 400 800 600 720 S 1000 640 1200 720'/%3E%3C/g%3E%3C/svg%3E");
+  background-size: auto, auto, auto, cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-attachment: fixed;
 }
 
 #root { min-height: 100vh; }
@@ -198,11 +199,13 @@ body.vscode-light {
 
 /* ── Stage row: portrait + waveform ─────────────────────────────────────── */
 .stage-row {
+  /* single source of truth for portrait + waveform height */
+  --frame-h: 208px;
   display: grid;
   grid-template-columns: auto 1fr;
   gap: 12px;
   width: 100%;
-  align-items: stretch;
+  align-items: center;
 }
 
 .portrait-cell {
@@ -210,6 +213,7 @@ body.vscode-light {
 }
 
 .wave-cell {
+  height: var(--frame-h);
   background: var(--bg2);
   border-radius: var(--radius);
   border: 1px solid var(--border);
@@ -232,9 +236,9 @@ body.vscode-light {
   --frame-highlight: var(--char-color-light);
 
   position: relative;
-  /* portrait, roughly 9:16 — content stays centered & scales with object-fit:contain */
-  width: 124px;
-  aspect-ratio: 9 / 16;
+  /* portrait, roughly 9:16 — height shared with the waveform via --frame-h */
+  width: 120px;
+  height: var(--frame-h, 208px);
   padding: 6px;
   background: var(--frame-color);
   border-radius: 2px;
@@ -434,38 +438,57 @@ body.vscode-light {
 .adv-btn:hover { border-color: var(--char-color); color: var(--char-color); }
 .adv-counter { font-size: 10px; min-width: 32px; text-align: center; }
 
-/* Netflix-style subtitle — bold, slightly translucent backing, drop shadow */
+/* Caption card — soft char-tinted panel with a clear speaker chip */
 .subtitle-box {
   width: 100%;
-  min-height: 64px;
-  display: flex; align-items: center; justify-content: center;
-  padding: 10px 14px;
-  background: rgba(0,0,0,0.55);
-  border-radius: 6px;
-  border: 1px solid rgba(255,255,255,0.04);
-  text-align: center;
-  transition: opacity 0.2s, transform 0.2s;
+  min-height: 68px;
+  display: flex; flex-direction: column;
+  align-items: flex-start; justify-content: center;
+  gap: 7px;
+  padding: 12px 14px;
+  background:
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--char-color) 12%, var(--bg2)),
+      color-mix(in srgb, var(--char-color) 5%, var(--bg2)));
+  border: 1px solid color-mix(in srgb, var(--char-color) 22%, var(--border));
+  border-left: 3px solid var(--char-color);
+  border-radius: 8px;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.18);
+  transition: opacity 0.2s, transform 0.2s, border-color 0.25s, background 0.25s;
 }
 .subtitle-box.off {
   opacity: 0; pointer-events: none; transform: translateY(-4px);
   min-height: 0; height: 0; padding: 0; border-width: 0; margin: 0;
-  overflow: hidden;
+  gap: 0; overflow: hidden;
 }
-.subtitle-text {
-  font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
-  font-weight: 700;
-  font-size: 15px;
-  line-height: 1.4;
+
+/* Who is talking — colored chip, character in accent, "You" neutral */
+.subtitle-speaker {
+  font-family: var(--font-mono);
+  font-size: 9.5px; font-weight: 700;
+  letter-spacing: 1.2px; text-transform: uppercase;
+  line-height: 1;
+  padding: 4px 8px; border-radius: 5px;
+}
+.subtitle-speaker.speaker-char {
   color: #fff;
-  text-shadow:
-    0 0 4px rgba(0,0,0,0.95),
-    2px 2px 0 rgba(0,0,0,0.85),
-    -1px -1px 0 rgba(0,0,0,0.85);
-  word-break: break-word;
+  background: var(--char-color);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--char-color) 55%, transparent);
 }
-body.vscode-light .subtitle-box {
-  background: rgba(0,0,0,0.75);
-  border-color: rgba(0,0,0,0.1);
+.subtitle-speaker.speaker-user {
+  color: var(--text);
+  background: var(--bg3);
+  border: 1px solid var(--border);
+}
+
+.subtitle-text {
+  font-family: var(--font-ui);
+  font-weight: 600;
+  font-size: 15px;
+  line-height: 1.45;
+  color: var(--text);
+  text-align: left;
+  word-break: break-word;
 }
 
 /* ── Control row: mute + composer ───────────────────────────────────────── */
@@ -545,6 +568,16 @@ body.vscode-light .subtitle-box {
   background: var(--bg2);
   box-shadow: none;
 }
+.mute-btn.recording {
+  border-color: #ef4444;
+  color: #ef4444;
+  background: color-mix(in srgb, #ef4444 15%, var(--bg2));
+  animation: breathe-rec 1.2s ease-in-out infinite;
+}
+@keyframes breathe-rec {
+  0%, 100% { box-shadow: 0 0 8px #ef444466; }
+  50%       { box-shadow: 0 0 20px #ef444499, 0 0 36px #ef444433; }
+}
 
 .mute-ripple {
   position: absolute;
@@ -559,57 +592,49 @@ body.vscode-light .subtitle-box {
   100% { transform: scale(1.7); opacity: 0; }
 }
 
-/* ── Footer with quote ──────────────────────────────────────────────────── */
-.quote-footer {
+/* ── Inline quote — part of the main flow, no box ───────────────────────── */
+.quote-inline {
   margin-top: auto;
-  min-height: 140px;
-  padding: 22px 18px 24px;
-  position: relative;
-  display: flex; flex-direction: column;
-  align-items: center; justify-content: center;
-  gap: 8px;
-  background:
-    linear-gradient(180deg,
-      transparent 0%,
-      color-mix(in srgb, var(--char-color) 6%, var(--bg2)) 30%,
-      color-mix(in srgb, var(--char-color) 10%, var(--bg2)) 100%);
-  border-top: 1px dashed color-mix(in srgb, var(--char-color) 35%, var(--border));
-  border-radius: var(--radius) var(--radius) 0 0;
+  padding: 14px 4px 16px;
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 7px;
   text-align: center;
   user-select: text;
 }
 .quote-mark {
   font-family: Georgia, 'Times New Roman', serif;
-  font-size: 42px;
-  line-height: 0.6;
+  font-size: 22px;
+  line-height: 1;
   color: var(--char-color);
-  opacity: 0.55;
+  opacity: 0.5;
+  flex-shrink: 0;
 }
 .quote-text {
   font-family: Georgia, 'Times New Roman', serif;
   font-style: italic;
-  font-size: 14px;
-  line-height: 1.55;
-  color: var(--text);
-  max-width: 38ch;
-  opacity: 0.92;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-dim);
+  max-width: 40ch;
 }
 .quote-fade-in { animation: quote-in 0.5s ease; }
 @keyframes quote-in {
   from { opacity: 0; transform: translateY(4px); }
-  to   { opacity: 0.92; transform: translateY(0); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 .quote-cycle {
-  position: absolute;
-  top: 8px; right: 10px;
-  width: 22px; height: 22px;
+  width: 20px; height: 20px;
   border-radius: 50%;
   border: 1px solid var(--border);
   background: transparent;
   color: var(--text-dim);
   cursor: pointer;
-  font-size: 12px;
-  display: flex; align-items: center; justify-content: center;
+  font-size: 11px;
+  display: inline-flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  align-self: center;
   transition: color 0.15s, border-color 0.15s, transform 0.3s;
 }
 .quote-cycle:hover {

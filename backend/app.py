@@ -1,10 +1,16 @@
+import array
 import base64
 import json
+import math
 import os
+from collections import deque
+import platform
 import re
 import subprocess
 import tempfile
+import threading
 import time
+import wave
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -84,6 +90,56 @@ def format_gemini_error(exc: Exception) -> str:
     return text
 
 
+_safety_settings_cache: Optional[List[Any]] = None
+
+
+def gemini_safety_settings() -> Optional[List[Any]]:
+    """Disable Gemini content blocking so profanity / aggressive personas aren't silently
+    refused (a refusal leaves the companion with no text AND no voice)."""
+    global _safety_settings_cache
+    if _safety_settings_cache is not None:
+        return _safety_settings_cache or None
+    from google.genai import types
+
+    threshold = (
+        getattr(types.HarmBlockThreshold, "BLOCK_NONE", None)
+        or getattr(types.HarmBlockThreshold, "OFF", None)
+    )
+    settings: List[Any] = []
+    if threshold is not None:
+        for name in (
+            "HARM_CATEGORY_HARASSMENT",
+            "HARM_CATEGORY_HATE_SPEECH",
+            "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+            "HARM_CATEGORY_DANGEROUS_CONTENT",
+            "HARM_CATEGORY_CIVIC_INTEGRITY",
+        ):
+            category = getattr(types.HarmCategory, name, None)
+            if category is None:
+                continue
+            try:
+                settings.append(types.SafetySetting(category=category, threshold=threshold))
+            except Exception:
+                continue
+    _safety_settings_cache = settings
+    return settings or None
+
+
+def _safe_response_text(response: Any) -> str:
+    """Read response text without raising when a candidate was blocked/empty."""
+    try:
+        text = response.text
+        if text:
+            return text.strip()
+    except Exception:
+        pass
+    try:
+        parts = response.candidates[0].content.parts
+        return "".join(getattr(p, "text", "") or "" for p in parts).strip()
+    except Exception:
+        return ""
+
+
 def generate_with_gemini(
     *,
     system_prompt: str,
@@ -98,6 +154,9 @@ def generate_with_gemini(
         "temperature": 0.7,
         "max_output_tokens": 400,
     }
+    safety = gemini_safety_settings()
+    if safety:
+        base_kwargs["safety_settings"] = safety
     if json_mode:
         base_kwargs["response_mime_type"] = "application/json"
         # A response_schema forces structured output — the model literally cannot return
@@ -139,7 +198,7 @@ def generate_with_gemini(
                 contents=user_prompt,
                 config=types.GenerateContentConfig(**config_kwargs),
             )
-            text = (response.text or "").strip()
+            text = _safe_response_text(response)
             if text:
                 return text
             raise RuntimeError("Gemini returned an empty response.")
@@ -293,38 +352,68 @@ def call_gemini(
     return {"text": spoken, "emotion": emotion}
 
 
+def _ffmpeg_path() -> str:
+    return os.getenv("FFMPEG_PATH", "ffmpeg")
+
+
+def detect_dshow_audio_device() -> str:
+    """Find a Windows DirectShow microphone device name for ffmpeg capture.
+    Honors MIC_DEVICE_NAME if set; otherwise prefers a real mic over virtual ones."""
+    configured = os.getenv("MIC_DEVICE_NAME", "").strip()
+    if configured:
+        return configured
+    try:
+        proc = subprocess.run(
+            [_ffmpeg_path(), "-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        output = (proc.stderr or "") + (proc.stdout or "")
+    except Exception:
+        return ""
+    devices = re.findall(r'"([^"]+)"\s*\(audio\)', output)
+    for name in devices:
+        lowered = name.lower()
+        if "microphone" in lowered and "steam" not in lowered and "virtual" not in lowered:
+            return name
+    return devices[0] if devices else ""
+
+
+def _record_command(ffmpeg: str, duration: float, wav_path: str) -> List[str]:
+    """Build the platform-appropriate ffmpeg capture command."""
+    common_tail = ["-t", str(duration), "-ar", "16000", "-ac", "1", wav_path]
+    head = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y"]
+    system = platform.system()
+    if system == "Windows":
+        device = detect_dshow_audio_device()
+        if not device:
+            raise RuntimeError(
+                "No microphone was found via ffmpeg/DirectShow. Plug in a mic, set it as the "
+                "Windows default input device, or set MIC_DEVICE_NAME in backend/.env."
+            )
+        return head + ["-f", "dshow", "-i", f"audio={device}"] + common_tail
+    if system == "Darwin":
+        return head + ["-f", "avfoundation", "-i", ":0"] + common_tail
+    # Linux / other
+    return head + ["-f", "alsa", "-i", "default"] + common_tail
+
+
 def record_audio(seconds: float) -> str:
     duration = max(1.0, min(float(seconds), 20.0))
     tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
     tmp.close()
     wav_path = tmp.name
 
-    ffmpeg = "ffmpeg"
-    # macOS default input device via avfoundation
-    cmd = [
-        ffmpeg,
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-y",
-        "-f",
-        "avfoundation",
-        "-i",
-        ":0",
-        "-t",
-        str(duration),
-        "-ar",
-        "16000",
-        "-ac",
-        "1",
-        wav_path,
-    ]
+    cmd = _record_command(_ffmpeg_path(), duration, wav_path)
 
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=duration + 15)
     except FileNotFoundError as exc:
         raise RuntimeError(
-            "ffmpeg is required for microphone capture. Install it with: brew install ffmpeg"
+            "ffmpeg is required for microphone capture but was not found on PATH. "
+            "Install it (Windows: 'winget install Gyan.FFmpeg' or download from ffmpeg.org) "
+            "or set FFMPEG_PATH in backend/.env."
         ) from exc
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError("Microphone recording timed out.") from exc
@@ -333,10 +422,8 @@ def record_audio(seconds: float) -> str:
         stderr = (result.stderr or "").strip()
         if "not authorized" in stderr.lower() or "permission" in stderr.lower():
             raise RuntimeError(
-                "Microphone permission denied for the backend process. On macOS open "
-                "System Settings → Privacy & Security → Microphone and enable access for "
-                "Terminal (or Cursor/VS Code if you start the backend from the integrated terminal), "
-                "then restart the backend."
+                "The microphone is blocked for the backend process. Enable microphone access "
+                "for desktop apps in your OS privacy settings, then restart the backend."
             )
         raise RuntimeError(f"Could not record audio: {stderr or 'unknown ffmpeg error'}")
 
@@ -344,6 +431,130 @@ def record_audio(seconds: float) -> str:
         raise RuntimeError("No audio was captured. Check your microphone input device.")
 
     return wav_path
+
+
+# ── Voice-activity recording (auto-stop when the speaker pauses) ────────────
+VAD_SAMPLE_RATE = 16000
+VAD_FRAME_MS = 30
+VAD_START_TIMEOUT = float(os.getenv("VAD_START_TIMEOUT", "8"))   # wait this long for speech to begin
+VAD_SILENCE_TAIL = float(os.getenv("VAD_SILENCE_TAIL", "0.8"))    # pause length that ends a turn
+VAD_MAX_SECONDS = float(os.getenv("VAD_MAX_SECONDS", "20"))       # hard cap on a single turn
+
+# Shared stop signal so the mic button can interrupt an in-progress recording.
+_listen_stop = threading.Event()
+
+
+def _stream_command(ffmpeg: str) -> List[str]:
+    """ffmpeg command that streams raw 16-bit mono PCM to stdout."""
+    head = [ffmpeg, "-hide_banner", "-loglevel", "error"]
+    tail = ["-ar", str(VAD_SAMPLE_RATE), "-ac", "1", "-f", "s16le", "-"]
+    system = platform.system()
+    if system == "Windows":
+        device = detect_dshow_audio_device()
+        if not device:
+            raise RuntimeError(
+                "No microphone was found via ffmpeg/DirectShow. Set it as the Windows default "
+                "input device or set MIC_DEVICE_NAME in backend/.env."
+            )
+        # small audio_buffer_size keeps capture latency low so end-of-speech is detected promptly
+        return head + ["-f", "dshow", "-audio_buffer_size", "80", "-i", f"audio={device}"] + tail
+    if system == "Darwin":
+        return head + ["-f", "avfoundation", "-i", ":0"] + tail
+    return head + ["-f", "alsa", "-i", "default"] + tail
+
+
+def _rms_s16(buf: bytes) -> float:
+    count = len(buf) // 2
+    if count == 0:
+        return 0.0
+    samples = array.array("h")
+    samples.frombytes(buf[: count * 2])
+    total = 0
+    for value in samples:
+        total += value * value
+    return math.sqrt(total / count)
+
+
+def _write_wav(pcm: bytes, rate: int) -> str:
+    tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+    tmp.close()
+    with wave.open(tmp.name, "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(rate)
+        handle.writeframes(pcm)
+    return tmp.name
+
+
+def record_until_silence(stop_event: Optional[threading.Event] = None) -> str:
+    """Capture from the mic and stop automatically once the speaker pauses
+    (or when stop_event is set, or a max duration is hit). Returns a WAV path,
+    or "" if no speech was detected."""
+    ffmpeg = _ffmpeg_path()
+    frame_bytes = int(VAD_SAMPLE_RATE * VAD_FRAME_MS / 1000) * 2
+    frame_sec = VAD_FRAME_MS / 1000.0
+    cmd = _stream_command(ffmpeg)
+
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            "ffmpeg is required for microphone capture but was not found on PATH. "
+            "Install it or set FFMPEG_PATH in backend/.env."
+        ) from exc
+
+    pcm = bytearray()
+    # Adaptive noise floor: a sliding window of recent levels; the 20th percentile
+    # approximates the background even while speech is present (speech is bursty, so
+    # gaps pull the low percentile down). Robust to loud rooms AND immediate talking.
+    window: deque = deque(maxlen=max(10, int(1.5 / frame_sec)))
+    speech_started = False
+    speech_frames = 0
+    silence_run = 0.0
+    elapsed = 0.0
+
+    try:
+        assert proc.stdout is not None
+        while True:
+            if stop_event is not None and stop_event.is_set():
+                break
+            chunk = proc.stdout.read(frame_bytes)
+            if not chunk or len(chunk) < frame_bytes:
+                break
+            pcm.extend(chunk)
+            elapsed += frame_sec
+            level = _rms_s16(chunk)
+
+            window.append(level)
+            ordered = sorted(window)
+            noise_floor = ordered[len(ordered) // 5]  # ~20th percentile
+            threshold = max(500.0, noise_floor * 2.5 + 200.0)
+
+            if level > threshold:
+                speech_frames += 1
+                if speech_frames >= 2:        # require 2 frames to avoid clicks/pops
+                    speech_started = True
+                silence_run = 0.0
+            else:
+                speech_frames = 0
+                if speech_started:
+                    silence_run += frame_sec
+
+            if speech_started and silence_run >= VAD_SILENCE_TAIL:
+                break
+            if not speech_started and elapsed >= VAD_START_TIMEOUT:
+                break
+            if elapsed >= VAD_MAX_SECONDS:
+                break
+    finally:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+    if not speech_started or len(pcm) < frame_bytes * 4:
+        return ""
+    return _write_wav(bytes(pcm), VAD_SAMPLE_RATE)
 
 
 def transcribe_audio(wav_path: str) -> str:
@@ -372,8 +583,9 @@ def transcribe_audio(wav_path: str) -> str:
                         ],
                     )
                 ],
+                config=types.GenerateContentConfig(safety_settings=gemini_safety_settings()),
             )
-            transcript = (response.text or "").strip()
+            transcript = _safe_response_text(response)
             if transcript:
                 return transcript
             raise RuntimeError("Gemini returned an empty transcript.")
@@ -407,8 +619,9 @@ def transcribe_audio_bytes(audio_bytes: bytes, mime_type: str) -> str:
                         ],
                     )
                 ],
+                config=types.GenerateContentConfig(safety_settings=gemini_safety_settings()),
             )
-            transcript = (response.text or "").strip()
+            transcript = _safe_response_text(response)
             if transcript:
                 return transcript
             raise RuntimeError("Gemini returned an empty transcript.")
@@ -479,12 +692,13 @@ def listen() -> Any:
     if request.method == "OPTIONS":
         return ("", 204)
 
-    payload = request.get_json(silent=True) or {}
-    duration = float(payload.get("duration", LISTEN_SECONDS))
-
+    # Auto-stop when the speaker pauses (VAD); the mic button can also interrupt via /stop.
+    _listen_stop.clear()
     wav_path = ""
     try:
-        wav_path = record_audio(duration)
+        wav_path = record_until_silence(stop_event=_listen_stop)
+        if not wav_path:
+            return jsonify({"transcript": ""})  # nothing said / interrupted before speech
         transcript = transcribe_audio(wav_path)
         return jsonify({"transcript": transcript})
     except Exception as exc:
@@ -495,6 +709,15 @@ def listen() -> Any:
                 os.remove(wav_path)
             except OSError:
                 pass
+
+
+@app.route("/stop", methods=["POST", "OPTIONS"])
+def stop_listening() -> Any:
+    if request.method == "OPTIONS":
+        return ("", 204)
+    # Signal any in-progress /listen recording to finish now (mic button pressed).
+    _listen_stop.set()
+    return jsonify({"ok": True})
 
 
 @app.route("/respond", methods=["POST", "OPTIONS"])
@@ -541,4 +764,5 @@ def respond() -> Any:
 if __name__ == "__main__":
     # use_reloader=False: the stat reloader was watching the system Python stdlib and
     # restarting on every file-touch, dropping in-flight requests. Disable for stability.
-    app.run(host="127.0.0.1", port=PORT, debug=True, use_reloader=False)
+    # threaded=True so /stop can interrupt a blocking /listen recording concurrently.
+    app.run(host="127.0.0.1", port=PORT, debug=True, use_reloader=False, threaded=True)

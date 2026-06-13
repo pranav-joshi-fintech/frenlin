@@ -592,6 +592,16 @@ body.vscode-light {
   background: var(--bg2);
   box-shadow: none;
 }
+/* Conversation mode active (hands-free). The 'recording' class layers on top while
+   actively listening; this keeps a steady accent ring between turns too. */
+.mute-btn.conversing {
+  border-color: var(--char-color);
+  color: var(--char-color);
+  background: color-mix(in srgb, var(--char-color) 22%, var(--bg2));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--char-color) 28%, transparent),
+              0 0 18px var(--accent-glow);
+}
+
 .mute-btn.recording {
   border-color: #ef4444;
   color: #ef4444;

@@ -153,9 +153,9 @@ export class CompanionViewProvider implements vscode.WebviewViewProvider {
       this.context.subscriptions
     );
 
-    const defaultProfile = this._characters.find(c => c.id === 'vegeta')?.id
+    const defaultProfile = this._characters.find(c => c.id === 'frieran')?.id
       ?? this._characters[0]?.id
-      ?? 'vegeta';
+      ?? 'frieran';
     const activeProfile = getActiveProfile(this.context, defaultProfile);
     const initPayload = {
       type: 'init',
@@ -335,6 +335,46 @@ export class CompanionViewProvider implements vscode.WebviewViewProvider {
             message: error instanceof Error ? error.message : 'Backend audio request failed.',
           });
         }
+        break;
+      }
+      case 'startBackendListen': {
+        // Robust mic path: record + transcribe on the Python backend (ffmpeg), bypassing
+        // the unreliable webview getUserMedia permission layer entirely.
+        const requestId = String(msg.requestId ?? '');
+        const duration = Number(msg.duration ?? 7);
+        const base = this._backendUrl.replace(/\/respond\/?$/, '');
+        try {
+          const res = await fetch(`${base}/listen`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ duration }),
+          });
+          if (!res.ok) {
+            const errText = await res.text().catch(() => '');
+            throw new Error(`Backend ${res.status}: ${errText.slice(0, 300)}`);
+          }
+          const data = await res.json() as { transcript?: string; error?: string };
+          if (data.error) { throw new Error(data.error); }
+          webview.postMessage({ type: 'sttResult', requestId, transcript: data.transcript ?? '' });
+        } catch (error) {
+          webview.postMessage({
+            type: 'sttError',
+            requestId,
+            message: error instanceof Error ? error.message : 'Microphone capture failed.',
+          });
+        }
+        break;
+      }
+      case 'stopBackendListen': {
+        // Mic button pressed mid-recording — tell the backend to finish capturing now.
+        const base = this._backendUrl.replace(/\/respond\/?$/, '');
+        try {
+          await fetch(`${base}/stop`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}',
+          });
+        } catch { /* best effort */ }
         break;
       }
       case 'setActiveProfile': {

@@ -27,8 +27,12 @@ let adviceIdx                             = 0;
 let backendUrl                            = '';
 let elevenLabsKey                         = '';
 let historyOpen                           = false;
-let isRecording                           = false;   // push-to-talk active
+let isRecording                           = false;   // push-to-talk active (webview mic)
+let isListening                           = false;   // backend ffmpeg capture in progress
 let isProcessing                          = false;
+let conversationActive                    = false;   // hands-free conversation loop running
+let cancelTurn                            = false;   // discard the in-flight listen result
+let currentAudio: HTMLAudioElement|null   = null;    // the TTS clip currently playing
 let typewriterTimer: ReturnType<typeof setInterval>|null = null;
 let activeRequestId                        = '';
 let ccEnabled                              = true;   // captions on by default
@@ -153,11 +157,6 @@ function renderApp(): void {
         <button id="btn-cc" class="cc-btn on" title="Toggle captions" aria-pressed="true">
           <span class="cc-glyph">CC</span>
         </button>
-        <div class="advice-row">
-          <button id="btn-prev" class="adv-btn" title="Previous">‹</button>
-          <span id="adv-counter" class="adv-counter mono dim">—</span>
-          <button id="btn-next" class="adv-btn" title="Next">›</button>
-        </div>
       </div>
 
       <div id="subtitle-box" class="subtitle-box">
@@ -204,6 +203,7 @@ function sendComposerMessage(): void {
   const text = input?.value.trim() ?? '';
   if (!text) { return; }
   if (input) { input.value = ''; }
+  ensureAudioContext();   // resume audio under this click so the reply isn't muted
   void handleUserSpeech(text);
 }
 
@@ -422,15 +422,8 @@ function setDialogue(text: string, instant?: boolean, speaker: 'user' | 'char' |
 }
 
 function updateAdviceNav(): void {
-  const counter = document.getElementById('adv-counter');
-  if (counter) { counter.textContent = adviceList.length ? `${adviceIdx + 1}/${adviceList.length}` : '—'; }
-}
-
-function showAdvice(idx2: number): void {
-  if (!adviceList.length) { return; }
-  adviceIdx = Math.max(0, Math.min(idx2, adviceList.length - 1));
-  setDialogue(adviceList[adviceIdx], false, 'char');
-  updateAdviceNav();
+  // Advice navigation UI was removed (the companion is conversational); kept as a no-op
+  // so the existing call sites that track adviceList/adviceIdx don't need touching.
 }
 
 // ── Waveform ──────────────────────────────────────────────────────────────
@@ -531,8 +524,76 @@ function applyRecordingUI(rec: boolean): void {
   if (ico2) { ico2.classList.toggle('hidden', true); }
 }
 
+// Backend (ffmpeg) capture — the reliable path when the webview mic is blocked.
+// Auto-stops when you pause (VAD on the backend); the mic button can also stop it early.
+function backendListen(): void {
+  if (isRecording || isProcessing || isListening) { return; }
+  isListening = true;
+  const requestId = makeRequestId();
+  activeRequestId = requestId;
+  applyRecordingUI(true);
+  setEmotion('ready');
+  setDialogue('Listening…', true, 'system');
+  vscode.postMessage({ type: 'startBackendListen', requestId });
+}
+
+function stopBackendListen(): void {
+  if (!isListening) { return; }
+  setDialogue('Processing…', true, 'system');
+  vscode.postMessage({ type: 'stopBackendListen' });
+}
+
+// ── Hands-free conversation loop ──────────────────────────────────────────
+// The mic is a conversation toggle, not a record button. Once on, it listens,
+// the AI replies when you pause, then it listens again — until you turn it off.
+function setMicConversing(active: boolean): void {
+  document.getElementById('btn-mute')?.classList.toggle('conversing', active);
+}
+
+function toggleConversation(): void {
+  if (conversationActive) { stopConversation(true); } else { startConversation(); }
+}
+
+function startConversation(): void {
+  if (conversationActive) { return; }
+  ensureAudioContext();   // resume audio under this tap so later replies aren't muted
+  conversationActive = true;
+  cancelTurn = false;
+  setMicConversing(true);
+  listenTurn();
+}
+
+function stopConversation(userInitiated = false): void {
+  conversationActive = false;
+  setMicConversing(false);
+  if (isListening) {                       // cancel an in-progress capture and drop its result
+    cancelTurn = true;
+    vscode.postMessage({ type: 'stopBackendListen' });
+  }
+  if (currentAudio) { try { currentAudio.pause(); } catch { /* */ } currentAudio = null; }
+  analyser = null;   // keep sharedAudioCtx alive for the next conversation
+  applyRecordingUI(false);
+  startIdleWave();
+  if (userInitiated) {
+    setDialogue('Conversation ended. Tap the mic to talk again.', true, 'system');
+    setEmotion('ready');
+  }
+}
+
+function listenTurn(): void {
+  if (conversationActive) { backendListen(); }
+}
+
+// Start the next listening turn once the AI has finished speaking/replying.
+function continueConversation(): void {
+  if (!conversationActive) { return; }
+  window.setTimeout(() => {
+    if (conversationActive && !isListening && !isProcessing) { listenTurn(); }
+  }, 350);
+}
+
 async function startRecording(): Promise<void> {
-  if (isRecording || isProcessing) { return; }
+  if (isRecording || isProcessing || isListening) { return; }
   let stream: MediaStream;
   try {
     if (!navigator.mediaDevices?.getUserMedia) {
@@ -541,10 +602,8 @@ async function startRecording(): Promise<void> {
     stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   } catch (err) {
     const detail = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
-    console.warn('[mommyasmr] getUserMedia failed:', detail);
-    vscode.postMessage({ type: 'openMicHelp', detail });
-    setDialogue(`Mic unavailable (${detail}). You can type your message instead.`, true);
-    setEmotion('sad');
+    console.warn('[mommyasmr] getUserMedia blocked, using backend capture instead:', detail);
+    backendListen();   // fall back to the Python/ffmpeg mic path
     return;
   }
   mediaStream = stream;
@@ -664,8 +723,22 @@ function reportError(message: string): void {
   vscode.postMessage({ type: 'showError', text: message });
 }
 
+// One AudioContext for the whole session, resumed under a user gesture (mic tap / send)
+// so later auto-played replies aren't silenced by the autoplay policy.
+let sharedAudioCtx: AudioContext|null = null;
+
+function ensureAudioContext(): AudioContext|null {
+  try {
+    if (!sharedAudioCtx) { sharedAudioCtx = new AudioContext(); }
+    if (sharedAudioCtx.state === 'suspended') { void sharedAudioCtx.resume(); }
+    return sharedAudioCtx;
+  } catch {
+    return null;
+  }
+}
+
 function playAudioBase64(audioBase64: string, mimeType: string): void {
-  if (!audioBase64) { return; }
+  if (!audioBase64) { continueConversation(); return; }
   const binary = atob(audioBase64);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) {
@@ -674,52 +747,42 @@ function playAudioBase64(audioBase64: string, mimeType: string): void {
   const blob = new Blob([bytes], { type: mimeType || 'audio/mpeg' });
   const url = URL.createObjectURL(blob);
   const audio = new Audio(url);
+  currentAudio = audio;
 
   let done = false;
   const cleanup = (): void => {
     if (done) { return; }
     done = true;
     URL.revokeObjectURL(url);
+    if (currentAudio === audio) { currentAudio = null; }
     if (!isRecording) {
       analyser = null;
-      if (playbackCtx) { try { void playbackCtx.close(); } catch { /* */ } playbackCtx = null; }
       startIdleWave();
     }
-  };
-
-  const startPlayback = (): void => {
-    audio.play().catch(() => { cleanup(); /* autoplay can be blocked */ });
+    // AI finished speaking — take the next turn if we're in a conversation.
+    continueConversation();
   };
 
   audio.onended = cleanup;
   audio.onerror = cleanup;
 
-  // Drive the waveform from the real TTS audio (unless the mic is mid-recording).
+  // Visualize via the shared (already-running) context so playback is never silenced.
   if (!isRecording) {
-    try {
-      const ctx = new AudioContext();
-      const srcNode = ctx.createMediaElementSource(audio);
-      const an = ctx.createAnalyser();
-      an.fftSize = 1024;
-      srcNode.connect(an);
-      an.connect(ctx.destination);   // keep audio audible
-      playbackCtx = ctx;
-      analyser = an;                 // startLiveWave reads this global
-      startLiveWave();
-      // A media element routed through a *suspended* AudioContext is SILENT, which is
-      // the "first response has no sound" glitch. Resume first, then play.
-      if (ctx.state === 'suspended') {
-        ctx.resume().then(startPlayback).catch(startPlayback);
-      } else {
-        startPlayback();
-      }
-    } catch {
-      // Web Audio unavailable — fall back to plain playback (no visualization).
-      startPlayback();
+    const ctx = ensureAudioContext();
+    if (ctx) {
+      try {
+        const srcNode = ctx.createMediaElementSource(audio);
+        const an = ctx.createAnalyser();
+        an.fftSize = 1024;
+        srcNode.connect(an);
+        an.connect(ctx.destination);   // keep audio audible
+        analyser = an;                 // startLiveWave reads this global
+        startLiveWave();
+      } catch { /* visualization is optional; audio still plays below */ }
     }
-  } else {
-    startPlayback();
   }
+
+  audio.play().catch(() => { cleanup(); /* shouldn't happen post-gesture, but stay safe */ });
 }
 
 // ── AI call ───────────────────────────────────────────────────────────────
@@ -791,9 +854,7 @@ function bindEvents(): void {
     toggleDropdown();
   });
   document.addEventListener('click', () => { closeDropdown(); closeConvoMenu(); });
-  el('btn-mute').addEventListener('click', () => { if (isRecording) { stopRecording(); } else { void startRecording(); } });
-  el('btn-prev').addEventListener('click', () => showAdvice(adviceIdx - 1));
-  el('btn-next').addEventListener('click', () => showAdvice(adviceIdx + 1));
+  el('btn-mute').addEventListener('click', () => { toggleConversation(); });
   el('composer-send').addEventListener('click', () => sendComposerMessage());
   el('composer-input').addEventListener('keydown', (event) => {
     const keyboardEvent = event as KeyboardEvent;
@@ -844,7 +905,7 @@ window.addEventListener('message', (ev) => {
         const lastEmotion = [...currentMessages].reverse().find(m => m.role === 'assistant' && m.emotion);
         setEmotion(lastEmotion?.emotion ?? 'ready');
       } else {
-        setDialogue('Click the mic button below to start talking.');
+        setDialogue('Tap the mic to start a conversation — I’ll reply when you pause.');
         setEmotion('ready');
       }
 
@@ -871,22 +932,23 @@ window.addEventListener('message', (ev) => {
         vscode.postMessage({ type: 'saveMessage', conversationId: currentConvoId, role: 'assistant', content: clean, emotion });
       }
 
+      const composerInput = document.getElementById('composer-input') as HTMLTextAreaElement | null;
+      if (composerInput) { composerInput.disabled = false; }
+      isProcessing = false;
+      activeRequestId = '';
+
       const audioBase64 = String(msg.audioBase64 ?? '');
       const audioMimeType = String(msg.audioMimeType ?? 'audio/mpeg');
       const audioError = String(msg.audioError ?? '');
       if (audioBase64) {
-        playAudioBase64(audioBase64, audioMimeType);
-      } else if (audioError) {
-        // Voice synthesis failed server-side — surface it instead of failing silently.
-        console.warn('[mommyasmr] voice synthesis failed:', audioError);
-        vscode.postMessage({ type: 'showError', text: `Voice unavailable: ${audioError}` });
+        playAudioBase64(audioBase64, audioMimeType);   // next turn continues when it ends
+      } else {
+        if (audioError) {
+          console.warn('[mommyasmr] voice synthesis failed:', audioError);
+          vscode.postMessage({ type: 'showError', text: `Voice unavailable: ${audioError}` });
+        }
+        continueConversation();                         // no audio to wait on → next turn now
       }
-
-      const composerInput = document.getElementById('composer-input') as HTMLTextAreaElement | null;
-      if (composerInput) { composerInput.disabled = false; }
-
-      isProcessing = false;
-      activeRequestId = '';
       break;
     }
 
@@ -898,6 +960,36 @@ window.addEventListener('message', (ev) => {
       if (composerInput) { composerInput.disabled = false; }
       isProcessing = false;
       activeRequestId = '';
+      continueConversation();   // keep the conversation alive after a transient error
+      break;
+    }
+
+    case 'sttResult': {
+      if (activeRequestId && (msg.requestId as string) !== activeRequestId) { break; }
+      isListening = false;
+      applyRecordingUI(false);
+      activeRequestId = '';
+      if (cancelTurn) { cancelTurn = false; break; }   // conversation was stopped mid-listen
+      const transcript = String(msg.transcript ?? '').trim();
+      if (transcript) {
+        void handleUserSpeech(transcript);
+      } else if (conversationActive) {
+        listenTurn();                                  // heard only silence — keep listening
+      } else {
+        setDialogue("I didn't catch that — tap the mic, or type below.", true, 'system');
+        setEmotion('ready');
+      }
+      break;
+    }
+
+    case 'sttError': {
+      if (activeRequestId && (msg.requestId as string) !== activeRequestId) { break; }
+      isListening = false;
+      cancelTurn = false;
+      applyRecordingUI(false);
+      activeRequestId = '';
+      reportError(String(msg.message ?? 'Microphone capture failed.'));
+      stopConversation();   // bail out of the loop on a real capture failure
       break;
     }
 

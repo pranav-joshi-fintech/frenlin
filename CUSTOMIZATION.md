@@ -1,135 +1,78 @@
-# MommyASMR.ai — Customization Guide
+# Vegeta ASMR — Customization Guide
 
 Everything you need to plug in real assets, voices, and API keys.
 
 ---
 
-## 1. API Keys — `config/keys.env`
+## 1. API Keys
 
-Open `config/keys.env` and fill in your keys:
+Keys live in two places (both gitignored):
 
-```env
-# Claude (AI responses) — https://console.anthropic.com/
-ANTHROPIC_API_KEY=sk-ant-...
+| File | Used by |
+|------|---------|
+| `backend/.env` | Flask server (Gemini + ElevenLabs) |
+| `config/keys.env` | VS Code extension (voice IDs, backend URL) |
 
-# ElevenLabs (voice synthesis) — https://elevenlabs.io/
-# Leave blank to run in text-only mode
-ELEVENLABS_API_KEY=...
+Copy the examples:
 
-# ElevenLabs voice IDs per character
-# Find them at: https://elevenlabs.io/voice-lab → click a voice → copy ID from URL
-AURORA_VOICE_ID=...
-KAI_VOICE_ID=...
-SAGE_VOICE_ID=...
+```bash
+cp backend/.env.example backend/.env
+cp config/keys.env.example config/keys.env
 ```
 
-> **Never commit `keys.env` to git.** It's already in `.gitignore`.
+Fill in:
+
+```env
+GEMINI_API_KEY=...
+ELEVENLABS_API_KEY=...
+VEGETA_VOICE_ID=...
+FRIERAN_VOICE_ID=...
+ZOEY_VOICE_ID=...
+VEGETAASMR_BACKEND_URL=http://127.0.0.1:5001/respond
+```
 
 ---
 
-## 2. Adding/Replacing Character Art — `characters/<name>/emotions/`
-
-Each character has its own folder:
+## 2. Character Art — `characters/<name>/emotions/`
 
 ```
 characters/
-  aurora/
+  vegeta/
     emotions/
-      happy.png       ← shown for [happy] responses
-      sad.png         ← shown for [sad] responses
-      angry.png       ← shown for [angry] responses
-      surprised.png   ← triggers shake animation
-      supportive.png  ← triggers glow pulse animation
-      thinking.png    ← shown while waiting for AI
-    prompt.txt        ← personality & system prompt
-  kai/
-    emotions/  ...
-    prompt.txt
-  sage/
-    emotions/  ...
+      happy.svg
+      sad.svg
+      angry.svg
+      ...
     prompt.txt
 ```
 
-**Supported formats:** `.png`, `.gif`, `.jpg`, `.jpeg`, `.svg`, `.webp`
-
-**Size:** 300×300px recommended. The frame is 200×200px display size.
-**GIFs work** — great for a 1–2 second surprised/happy loop.
-
-The filename (without extension) is the emotion name. You can add custom emotions
-(e.g. `excited.png`) as long as your `prompt.txt` tells Claude to use `[excited]`.
+Supported formats: `.png`, `.gif`, `.jpg`, `.jpeg`, `.svg`, `.webp`
 
 ---
 
-## 3. Editing Character Personalities — `characters/<name>/prompt.txt`
+## 3. Character Personalities — `characters/<name>/prompt.txt`
 
-Each `prompt.txt` is the full system prompt sent to Claude for that character.
-
-**Required format rules** (Claude needs these to work correctly):
-
-```
-RESPONSE FORMAT: Always start with an emotion tag on its own line, then your response.
-Valid emotions: [happy] [sad] [angry] [surprised] [supportive] [thinking]
-
-RESPONSE LENGTH: 2-4 sentences maximum.
-```
-
-Keep this block in every prompt. Customize everything else freely — personality,
-backstory, speech patterns, pet names, areas of expertise.
+Each `prompt.txt` is sent to Gemini as the persona for that character.
 
 ---
 
 ## 4. Adding a New Character
 
-1. Create folder: `characters/yourname/`
-2. Create folder: `characters/yourname/emotions/`
-3. Drop in your art files: `happy.png`, `sad.png`, etc.
-4. Write `characters/yourname/prompt.txt`
-5. Add accent color in `src/extension.ts` → `ACCENT_MAP`:
-   ```ts
-   const ACCENT_MAP: Record<string, string> = {
-     aurora: '#d4537e',
-     kai:    '#378add',
-     sage:   '#1d9e75',
-     yourname: '#your-hex-color',   // ← add this
-   };
-   ```
-6. Add ElevenLabs voice ID in `config/keys.env`:
-   ```env
-   YOURNAME_VOICE_ID=...
-   ```
-   And reference it in `VOICE_MAP` in `src/extension.ts`:
-   ```ts
-   yourname: cfg['YOURNAME_VOICE_ID'] || '',
-   ```
-7. Run `npm run compile` and reload the extension.
-
-The character will automatically appear in the voice dropdown.
+1. Create `characters/yourname/emotions/` with art files
+2. Write `characters/yourname/prompt.txt`
+3. Add accent color and voice ID in `src/extension.ts` (`ACCENT_MAP`, `VOICE_MAP`)
+4. Add `YOURNAME_VOICE_ID=...` to `config/keys.env` and `backend/.env`
+5. Run `npm run compile` and reload the extension
 
 ---
 
-## 5. Changing Accent Colors
-
-Each character's accent color controls:
-- The waveform color
-- The emotion status text
-- The dialogue box top border
-- The mute button glow
-- The active profile indicator in the dropdown
-
-Edit `ACCENT_MAP` in `src/extension.ts`.
-
----
-
-## 6. First-Time Setup (full flow)
+## 5. First-Time Setup
 
 ```bash
-cd mommyasmr-ai
+cd vegetaasmr-ai
 npm install
 npm run compile
+cd backend && pip install -r requirements.txt && python app.py
 ```
 
-Then in VS Code: press `F5` to open the Extension Development Host.
-The panel opens in the bottom panel area by default. Drag it to the right side
-via View → Move Panel Right, or drag the tab.
-
-Press `Ctrl+Shift+M` to open/focus the companion from anywhere.
+Press `F5` in VS Code, open the Vegeta ASMR sidebar, and click the mic button to start talking.

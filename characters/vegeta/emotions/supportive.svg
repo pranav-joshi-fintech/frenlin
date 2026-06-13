@@ -1,8 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="300" height="300" viewBox="0 0 300 300">
-  <rect width="300" height="300" fill="#d4537e22" rx="8"/>
-  <rect x="2" y="2" width="296" height="296" fill="none" stroke="#d4537e" stroke-width="2" stroke-dasharray="8,4" rx="7"/>
+  <rect width="300" height="300" fill="#1565c022" rx="8"/>
+  <rect x="2" y="2" width="296" height="296" fill="none" stroke="#1565c0" stroke-width="2" stroke-dasharray="8,4" rx="7"/>
   <text x="150" y="130" font-size="80" text-anchor="middle" dominant-baseline="middle">🤗</text>
-  <text x="150" y="190" font-size="16" text-anchor="middle" fill="#d4537e" font-family="monospace" font-weight="bold">Aurora</text>
-  <text x="150" y="215" font-size="12" text-anchor="middle" fill="#d4537e99" font-family="monospace">[ supportive.png ]</text>
-  <text x="150" y="260" font-size="9" text-anchor="middle" fill="#d4537e66" font-family="monospace">replace with real art</text>
+  <text x="150" y="190" font-size="16" text-anchor="middle" fill="#1565c0" font-family="monospace" font-weight="bold">Vegeta</text>
+  <text x="150" y="215" font-size="12" text-anchor="middle" fill="#1565c099" font-family="monospace">[ supportive.png ]</text>
+  <text x="150" y="260" font-size="9" text-anchor="middle" fill="#1565c066" font-family="monospace">replace with real art</text>
 </svg>

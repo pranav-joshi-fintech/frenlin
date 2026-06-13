@@ -1,4 +1,4 @@
-// ── MommyASMR.ai webview — complete frontend ──────────────────────────────
+// ── Vegeta ASMR webview — complete frontend ───────────────────────────────
 // Runs in VS Code webview context (browser-like, no Node APIs)
 
 declare function acquireVsCodeApi(): VSCodeApi;
@@ -18,7 +18,7 @@ const vscode = acquireVsCodeApi();
 // ── State ─────────────────────────────────────────────────────────────────
 let characters: CharacterMeta[]           = [];
 let emotionUris: Record<string, EmotionUris> = {};
-let activeProfileId  = 'aurora';
+let activeProfileId  = 'vegeta';
 let conversations: Conversation[]         = [];
 let currentConvoId: string|null           = null;
 let currentMessages: Message[]            = [];
@@ -27,7 +27,7 @@ let adviceIdx                             = 0;
 let backendUrl                            = '';
 let elevenLabsKey                         = '';
 let historyOpen                           = false;
-let isMuted                               = false;   // starts UNMUTED = always listening
+let isMuted                               = true;    // require user click — VS Code webviews need a gesture
 let isProcessing                          = false;
 let typewriterTimer: ReturnType<typeof setInterval>|null = null;
 let activeRequestId                        = '';
@@ -486,7 +486,7 @@ function applyMuteUI(muted: boolean): void {
 }
 
 async function startListening(): Promise<void> {
-  if (isActuallyListening || isMuted) { return; }
+  if (isActuallyListening || isMuted || isProcessing) { return; }
 
   const SpeechRecCtor: typeof SpeechRecognition|undefined =
     (window as unknown as {SpeechRecognition?: typeof SpeechRecognition}).SpeechRecognition ??
@@ -509,30 +509,11 @@ async function startListening(): Promise<void> {
     return;
   }
 
-  audioCtx  = new AudioContext();
-  analyser  = audioCtx.createAnalyser();
-  analyser.fftSize = 1024;
-  const src = audioCtx.createMediaStreamSource(mediaStream);
-  src.connect(analyser);
-  startLiveWave();
+    const data = await response.json() as { transcript?: string; error?: string };
 
-  recognition = new SpeechRecCtor();
-  recognition.continuous      = false;
-  recognition.interimResults  = true;
-  recognition.lang            = 'en-US';
-  recognition.onstart = () => { isActuallyListening = true; };
-
-  recognition.onresult = (ev: SpeechRecognitionEvent) => {
-    const transcript = Array.from({ length: ev.results.length }, (_, i) => ev.results[i][0].transcript).join('');
-    if (ev.results[ev.results.length - 1].isFinal) {
-      stopMic();
-      if (transcript.trim()) { handleUserSpeech(transcript.trim()); }
-    } else {
-      // Show interim transcript faintly
-      const d = document.getElementById('dialogue');
-      if (d) { d.innerHTML = `<span style="opacity:0.45;font-style:italic">${esc(transcript)}</span>`; }
+    if (!response.ok) {
+      throw new Error(data.error || `HTTP ${response.status}`);
     }
-  };
 
   recognition.onerror = (ev: SpeechRecognitionError) => {
     if (ev.error !== 'no-speech' && ev.error !== 'aborted') {
@@ -543,26 +524,42 @@ async function startListening(): Promise<void> {
 
   recognition.onend = () => {
     isActuallyListening = false;
-    stopMic();
-    if (!isMuted && !isProcessing) { setTimeout(() => startListening(), 400); }
-  };
+    listenAbort = null;
 
-  recognition.start();
+    if (!transcript) {
+      setDialogue('No speech detected. Try again or type below.', true);
+      setEmotion('ready');
+      return;
+    }
+
+    await handleUserSpeech(transcript);
+  } catch (error) {
+    isActuallyListening = false;
+    listenAbort = null;
+
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      setDialogue('Click the mic to talk.', true);
+      setEmotion('ready');
+      return;
+    }
+
+    const message = error instanceof Error ? error.message : 'Voice capture failed.';
+    reportError(message);
+    vscode.postMessage({ type: 'openMicHelp' });
+  }
 }
 
 function stopMic(): void {
   isActuallyListening = false;
-  try {
-    if (recognition) {
-      try { recognition.stop(); } catch { /* some impls only have abort */ }
-      try { recognition.abort(); } catch { /* ignore */ }
-    }
-  } catch { /* */ }
-  recognition = null;
+  if (listenAbort) {
+    listenAbort.abort();
+    listenAbort = null;
+  }
   try { mediaStream?.getTracks().forEach(t => t.stop()); } catch { /* */ }
   mediaStream = null;
   if (audioCtx) { try { audioCtx.close(); } catch { /* */ } audioCtx = null; }
   analyser = null;
+  recognition = null;
   startIdleWave();
 }
 
@@ -617,6 +614,11 @@ function makeRequestId(): string {
 
 function getBackendEndpoint(): string {
   return backendUrl || 'http://127.0.0.1:5001/respond';
+}
+
+function getBackendBaseUrl(): string {
+  const endpoint = getBackendEndpoint();
+  return endpoint.replace(/\/respond\/?$/, '');
 }
 
 function reportError(message: string): void {
@@ -737,8 +739,7 @@ window.addEventListener('message', (ev) => {
       elevenLabsKey = (msg.elevenLabsKey as string) ?? '';
       conversations = (msg.conversations as Conversation[]) ?? [];
       currentConvoId = (msg.currentId    as string) ?? null;
-      activeProfileId = (msg.activeProfile as string) ?? (characters[0]?.id ?? 'aurora');
-      quotesList    = (msg.quotes        as string[]) ?? [];
+      activeProfileId = (msg.activeProfile as string) ?? (characters[0]?.id ?? 'vegeta');
 
       applyProfile(activeProfileId);
       renderHistory();
@@ -763,13 +764,12 @@ window.addEventListener('message', (ev) => {
         const lastEmotion = [...currentMessages].reverse().find(m => m.role === 'assistant' && m.emotion);
         setEmotion(lastEmotion?.emotion ?? 'ready');
       } else {
-        setDialogue('');
+        setDialogue('Click the mic button below to start talking.');
         setEmotion('ready');
       }
 
-      // Start listening immediately (unmuted by default)
       startIdleWave();
-      startListening();
+      setMuted(true);
       break;
     }
 
@@ -889,3 +889,4 @@ window.addEventListener('message', (ev) => {
 renderApp();
 bindEvents();
 startIdleWave();
+setMuted(true);

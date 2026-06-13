@@ -38,9 +38,15 @@ function loadCharacters(extensionPath: string, cfg: Record<string, string>): Cha
   if (!fs.existsSync(charsDir)) { return []; }
 
   const ACCENT_MAP: Record<string, string> = {
-    aurora: '#d4537e', kai: '#378add', sage: '#1d9e75'
+    zoey: '#3b82f6',      // blue
+    frieran: '#a5c8ff',   // light blue (cooler)
+    vegeta: '#7dd3fc',    // light blue (cyan-leaning)
+    aurora: '#d4537e', kai: '#378add', sage: '#1d9e75',
   };
   const VOICE_MAP: Record<string, string> = {
+    zoey: cfg['ZOEY_VOICE_ID'] || cfg['AURORA_VOICE_ID'] || '',
+    frieran: cfg['FRIERAN_VOICE_ID'] || cfg['KAI_VOICE_ID'] || '',
+    vegeta: cfg['VEGETA_VOICE_ID'] || cfg['SAGE_VOICE_ID'] || '',
     aurora: cfg['AURORA_VOICE_ID'] || '',
     kai: cfg['KAI_VOICE_ID'] || '',
     sage: cfg['SAGE_VOICE_ID'] || '',
@@ -71,6 +77,15 @@ function loadCharacters(extensionPath: string, cfg: Record<string, string>): Cha
 }
 
 // ── Webview Provider ───────────────────────────────────────────────────────
+function loadQuotes(extensionPath: string): string[] {
+  const quotesPath = path.join(extensionPath, 'quotes.txt');
+  if (!fs.existsSync(quotesPath)) { return []; }
+  return fs.readFileSync(quotesPath, 'utf8')
+    .split(/\r?\n/)
+    .map(l => l.trim())
+    .filter(l => l && !l.startsWith('#'));
+}
+
 export class CompanionViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'mommyasmr.companion';
   private _view?: vscode.WebviewView;
@@ -78,11 +93,13 @@ export class CompanionViewProvider implements vscode.WebviewViewProvider {
   private _cfg: Record<string, string>;
   private _characters: CharacterMeta[];
   private _backendUrl: string;
+  private _quotes: string[];
 
   constructor(private readonly context: vscode.ExtensionContext) {
     this._store = new ConversationStore(context);
     this._cfg = loadConfig(context.extensionPath);
     this._characters = loadCharacters(context.extensionPath, this._cfg);
+    this._quotes = loadQuotes(context.extensionPath);
     this._backendUrl = vscode.workspace.getConfiguration('mommyasmr').get<string>('backendUrl')
       || this._cfg['MOMMYASMR_BACKEND_URL']
       || this._cfg['FLASK_BACKEND_URL']
@@ -124,6 +141,7 @@ export class CompanionViewProvider implements vscode.WebviewViewProvider {
       backendUrl: this._backendUrl,
       elevenLabsKey: this._cfg['ELEVENLABS_API_KEY'] || '',
       emotionUris: this._buildEmotionUris(webviewView.webview),
+      quotes: this._quotes,
     };
     void webviewView.webview.postMessage(initPayload);
     // Re-send on focus in case first message was dropped before JS loaded

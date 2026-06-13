@@ -31,6 +31,10 @@ let isMuted                               = false;   // starts UNMUTED = always 
 let isProcessing                          = false;
 let typewriterTimer: ReturnType<typeof setInterval>|null = null;
 let activeRequestId                        = '';
+let ccEnabled                              = true;   // captions on by default
+let quotesList: string[]                   = [];
+let quoteIdx                               = 0;
+let quoteTimer: ReturnType<typeof setInterval>|null = null;
 
 // audio
 let audioCtx: AudioContext|null           = null;
@@ -96,6 +100,8 @@ function renderApp(): void {
 
     <!-- Main panel -->
     <div id="main" class="main">
+
+      <!-- ── 1. Convo bar ───────────────────────────────────────────── -->
       <div class="topbar">
         <button id="btn-hist" class="topbar-btn" title="Sessions">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="3" cy="6" r="1" fill="currentColor"/><circle cx="3" cy="12" r="1" fill="currentColor"/><circle cx="3" cy="18" r="1" fill="currentColor"/></svg>
@@ -112,6 +118,7 @@ function renderApp(): void {
         </button>
       </div>
 
+      <!-- ── 2. Voice bar ───────────────────────────────────────────── -->
       <div class="status-row">
         <span id="emotion-tag" class="emotion-tag accent-text">// ready</span>
         <button id="btn-voice" class="voice-btn accent-btn">
@@ -123,34 +130,49 @@ function renderApp(): void {
 
       <div id="voice-dropdown" class="voice-dropdown hidden"></div>
 
-      <div class="wave-container">
-        <canvas id="waveform" class="waveform"></canvas>
-      </div>
-
-      <div class="dialogue-box">
-        <div id="dialogue" class="dialogue-text"></div>
-      </div>
-      
-        <div class="composer-row">
-          <textarea id="composer-input" class="composer-input" rows="2" placeholder="Type a message if the mic is being stubborn..."></textarea>
-          <button id="composer-send" class="composer-send" title="Send message">Send</button>
+      <!-- ── 3. Portrait + soundwave (same row) ─────────────────────── -->
+      <div class="stage-row">
+        <div class="portrait-cell">
+          <div id="avatar-frame" class="pixel-frame">
+            <div class="pixel-frame-inner">
+              <img id="avatar-img" class="portrait-img" src="" alt="expression" draggable="false"/>
+              <div id="avatar-placeholder" class="portrait-placeholder">
+                <div class="placeholder-icon">✦</div>
+              </div>
+            </div>
+          </div>
         </div>
-
-      <div class="advice-row">
-        <button id="btn-prev" class="adv-btn">‹</button>
-        <span id="adv-counter" class="adv-counter mono dim">—</span>
-        <button id="btn-next" class="adv-btn">›</button>
+        <div class="wave-cell">
+          <canvas id="waveform" class="waveform"></canvas>
+        </div>
       </div>
 
-      <div class="mic-row">
+      <!-- ── 4. CC toggle + Netflix-style subtitles ─────────────────── -->
+      <div class="cc-row">
+        <button id="btn-cc" class="cc-btn on" title="Toggle captions" aria-pressed="true">
+          <span class="cc-glyph">CC</span>
+        </button>
+        <div class="advice-row">
+          <button id="btn-prev" class="adv-btn" title="Previous">‹</button>
+          <span id="adv-counter" class="adv-counter mono dim">—</span>
+          <button id="btn-next" class="adv-btn" title="Next">›</button>
+        </div>
+      </div>
+
+      <div id="subtitle-box" class="subtitle-box">
+        <div id="dialogue" class="subtitle-text"></div>
+      </div>
+
+      <!-- ── 5. Mic + composer ──────────────────────────────────────── -->
+      <div class="control-row">
         <button id="btn-mute" class="mute-btn" title="Toggle microphone">
-          <svg id="ico-unmuted" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <svg id="ico-unmuted" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
             <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
             <line x1="12" y1="19" x2="12" y2="23"/>
             <line x1="8" y1="23" x2="16" y2="23"/>
           </svg>
-          <svg id="ico-muted" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="hidden">
+          <svg id="ico-muted" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="hidden">
             <line x1="1" y1="1" x2="23" y2="23"/>
             <path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"/>
             <path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23"/>
@@ -159,19 +181,18 @@ function renderApp(): void {
           </svg>
           <div id="mute-ripple" class="mute-ripple"></div>
         </button>
+        <textarea id="composer-input" class="composer-input" rows="2" placeholder="Type a message if the mic is being stubborn..."></textarea>
+        <button id="composer-send" class="composer-send" title="Send message">Send</button>
       </div>
-    </div><!-- /main -->
 
-    <aside class="avatar-rail" aria-label="Character preview">
-      <div class="avatar-wrap expression-float">
-        <div id="avatar-frame" class="avatar-frame expression-card">
-          <img id="avatar-img" class="avatar-img expression-img" src="" alt="expression" draggable="false"/>
-          <div id="avatar-placeholder" class="avatar-placeholder expression-placeholder">
-            <div class="placeholder-icon">✦</div>
-          </div>
-        </div>
-      </div>
-    </aside>
+      <!-- ── 6. Footer with quote ───────────────────────────────────── -->
+      <footer class="quote-footer">
+        <div class="quote-mark">&ldquo;</div>
+        <div id="quote-text" class="quote-text">Take your time. Enjoy coding :)</div>
+        <button id="quote-cycle" class="quote-cycle" title="Another quote">↻</button>
+      </footer>
+
+    </div><!-- /main -->
   </div>
   `;
 }
@@ -204,6 +225,14 @@ function applyProfile(id: string): void {
   // refresh voice button label
   const voiceLabel = document.getElementById('voice-label');
   if (voiceLabel) { voiceLabel.textContent = c.name; }
+  // swap per-character frame palette
+  const frame = document.getElementById('avatar-frame');
+  if (frame) {
+    frame.classList.remove('char-zoey', 'char-frieran', 'char-vegeta', 'char-default');
+    const knownChars = ['zoey','frieran','vegeta'];
+    frame.classList.add(knownChars.includes(c.id) ? `char-${c.id}` : 'char-default');
+    frame.style.setProperty('--char-color', c.accentColor);
+  }
   // mark active in dropdown if open
   document.querySelectorAll('.vd-item').forEach(btn => {
     (btn as HTMLElement).classList.toggle('active', (btn as HTMLElement).dataset.id === id);
@@ -239,14 +268,46 @@ function setEmotion(emotion: string): void {
     }
   }
 
-  // CSS animation per emotion
+  // CSS animation per emotion — angry/surprised get the "oomph" treatment
   if (frame) {
-    frame.classList.remove('anim-shake','anim-bounce','anim-pulse','anim-wobble');
-    if (emotion === 'surprised') { frame.classList.add('anim-shake'); }
-    else if (emotion === 'happy') { frame.classList.add('anim-bounce'); }
-    else if (emotion === 'angry') { frame.classList.add('anim-wobble'); }
-    else if (emotion === 'supportive') { frame.classList.add('anim-pulse'); }
+    frame.classList.remove('anim-bounce','anim-pulse','anim-angry','anim-surprised');
+    // restart trick: force reflow so re-adding the same class replays the animation
+    void (frame as HTMLElement).offsetWidth;
+    if (emotion === 'angry')         { frame.classList.add('anim-angry'); }
+    else if (emotion === 'surprised'){ frame.classList.add('anim-surprised'); }
+    else if (emotion === 'happy')    { frame.classList.add('anim-bounce'); }
+    else if (emotion === 'supportive'){ frame.classList.add('anim-pulse'); }
   }
+}
+
+// ── CC + quotes ───────────────────────────────────────────────────────────
+function setCC(on: boolean): void {
+  ccEnabled = on;
+  const btn = document.getElementById('btn-cc');
+  const box = document.getElementById('subtitle-box');
+  if (btn) {
+    btn.classList.toggle('on', on);
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  }
+  if (box) { box.classList.toggle('off', !on); }
+}
+
+function showQuote(idx: number): void {
+  if (!quotesList.length) { return; }
+  quoteIdx = ((idx % quotesList.length) + quotesList.length) % quotesList.length;
+  const el2 = document.getElementById('quote-text');
+  if (el2) {
+    el2.classList.remove('quote-fade-in');
+    void (el2 as HTMLElement).offsetWidth;
+    el2.textContent = quotesList[quoteIdx];
+    el2.classList.add('quote-fade-in');
+  }
+}
+
+function startQuoteRotation(): void {
+  if (quoteTimer) { clearInterval(quoteTimer); }
+  if (quotesList.length <= 1) { return; }
+  quoteTimer = setInterval(() => showQuote(quoteIdx + 1), 12000);
 }
 
 // ── Voice dropdown ────────────────────────────────────────────────────────
@@ -327,27 +388,44 @@ function showAdvice(idx2: number): void {
 }
 
 // ── Waveform ──────────────────────────────────────────────────────────────
+function syncCanvasSize(cv: HTMLCanvasElement): void {
+  const w = cv.offsetWidth  || 240;
+  const h = cv.offsetHeight || 56;
+  if (cv.width !== w)  { cv.width  = w; }
+  if (cv.height !== h) { cv.height = h; }
+}
+
+function getCharColor(): string {
+  const frame = document.getElementById('avatar-frame');
+  if (frame) {
+    const v = getComputedStyle(frame).getPropertyValue('--char-color').trim();
+    if (v) { return v; }
+  }
+  return getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#3b82f6';
+}
+
 function startIdleWave(): void {
   const cv  = document.getElementById('waveform') as HTMLCanvasElement|null;
   if (!cv) { return; }
   const ctx2 = cv.getContext('2d');
   if (!ctx2) { return; }
-  cv.width  = cv.offsetWidth  || 240;
-  cv.height = cv.offsetHeight || 56;
+  syncCanvasSize(cv);
 
   function drawIdle(): void {
     if (analyser) { return; } // live wave takes over
+    syncCanvasSize(cv!);
     const w = cv!.width, h = cv!.height;
     ctx2!.clearRect(0, 0, w, h);
-    const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#d4537e';
-    ctx2!.strokeStyle = accent;
+    const color = getCharColor();
+    ctx2!.strokeStyle = color;
     ctx2!.lineWidth = 1.8;
     ctx2!.lineCap = 'round';
     wavePhase += 0.025;
+    const baseAmp = Math.max(6, h * 0.12);
     ctx2!.beginPath();
     for (let x = 0; x <= w; x++) {
-      const amp = 7 + Math.sin(x * 0.018 + wavePhase * 0.7) * 3;
-      const y = h / 2 + Math.sin(x * 0.045 + wavePhase) * amp + Math.sin(x * 0.09 + wavePhase * 1.6) * 3;
+      const amp = baseAmp + Math.sin(x * 0.018 + wavePhase * 0.7) * (baseAmp * 0.4);
+      const y = h / 2 + Math.sin(x * 0.045 + wavePhase) * amp + Math.sin(x * 0.09 + wavePhase * 1.6) * (baseAmp * 0.35);
       if (x === 0) { ctx2!.moveTo(x, y); } else { ctx2!.lineTo(x, y); }
     }
     ctx2!.stroke();
@@ -363,21 +441,21 @@ function startLiveWave(): void {
   if (!cv) { return; }
   const ctx2 = cv.getContext('2d');
   if (!ctx2) { return; }
-  cv.width  = cv.offsetWidth  || 240;
-  cv.height = cv.offsetHeight || 56;
+  syncCanvasSize(cv);
   const buf = new Uint8Array(analyser.frequencyBinCount);
 
   function drawLive(): void {
     if (!analyser) { startIdleWave(); return; }
+    syncCanvasSize(cv!);
     analyser.getByteTimeDomainData(buf);
     const w = cv!.width, h = cv!.height;
     ctx2!.clearRect(0, 0, w, h);
-    const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#d4537e';
-    ctx2!.strokeStyle = accent;
+    const color = getCharColor();
+    ctx2!.strokeStyle = color;
     ctx2!.lineWidth = 2;
     ctx2!.lineCap = 'round';
-    ctx2!.shadowColor = accent;
-    ctx2!.shadowBlur = 5;
+    ctx2!.shadowColor = color;
+    ctx2!.shadowBlur = 6;
     ctx2!.beginPath();
     const slice = w / buf.length;
     let x = 0;
@@ -692,6 +770,8 @@ function bindEvents(): void {
       sendComposerMessage();
     }
   });
+  el('btn-cc').addEventListener('click', () => setCC(!ccEnabled));
+  el('quote-cycle').addEventListener('click', () => showQuote(quoteIdx + 1));
 }
 
 // ── VS Code message handler ───────────────────────────────────────────────
@@ -707,9 +787,15 @@ window.addEventListener('message', (ev) => {
       conversations = (msg.conversations as Conversation[]) ?? [];
       currentConvoId = (msg.currentId    as string) ?? null;
       activeProfileId = (msg.activeProfile as string) ?? (characters[0]?.id ?? 'aurora');
+      quotesList    = (msg.quotes        as string[]) ?? [];
 
       applyProfile(activeProfileId);
       renderHistory();
+      setCC(true);
+      if (quotesList.length) {
+        showQuote(Math.floor(Math.random() * quotesList.length));
+        startQuoteRotation();
+      }
 
       // Resume the active conversation (messages + last advice/emotion)
       const cv = conversations.find(c => c.id === currentConvoId);

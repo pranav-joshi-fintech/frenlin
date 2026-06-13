@@ -210,60 +210,100 @@ export class CompanionViewProvider implements vscode.WebviewViewProvider {
           webview.postMessage({ type: 'backendError', requestId, message: 'Empty transcript.' });
           break;
         }
-        if (!this._backendUrl) {
-          webview.postMessage({ type: 'backendError', requestId, message: 'Backend URL is not configured.' });
+        const apiKey = this._cfg['ANTHROPIC_API_KEY'];
+        if (!apiKey) {
+          webview.postMessage({ type: 'backendError', requestId, message: 'ANTHROPIC_API_KEY not set in config/keys.env' });
           break;
         }
         try {
-          const response = await fetch(this._backendUrl, {
+          // Build conversation history
+          const history = (msg.history as Array<{role: string; content: string}> ?? [])
+            .slice(-10)
+            .filter((m: {role: string}) => m.role === 'user' || m.role === 'assistant')
+            .map((m: {role: string; content: string}) => ({ role: m.role as 'user' | 'assistant', content: String(m.content) }));
+
+          // Build system prompt with optional editor context
+          let systemPrompt = character?.prompt ?? 'You are a helpful coding companion.';
+          const editorCtx = msg.editorContext as {selectedText?: string; language?: string; fileName?: string} ?? {};
+          if (editorCtx.fileName || editorCtx.selectedText) {
+            const parts: string[] = [];
+            if (editorCtx.fileName) { parts.push(`file: ${editorCtx.fileName}`); }
+            if (editorCtx.language) { parts.push(`language: ${editorCtx.language}`); }
+            if (editorCtx.selectedText) { parts.push(`selection:\n"""${String(editorCtx.selectedText).slice(0, 600)}"""`); }
+            systemPrompt += `\n\n[Editor context — ${parts.join(' | ')}]`;
+          }
+
+          // Call Anthropic API directly from extension host
+          const anthropicResp = await fetch('https://api.anthropic.com/v1/messages', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+              'Content-Type': 'application/json',
+              'x-api-key': apiKey,
+              'anthropic-version': '2023-06-01',
+            },
             body: JSON.stringify({
-              transcript,
-              profileId,
-              characterPrompt: character?.prompt ?? '',
-              voiceId: character?.voiceId ?? '',
-              characterName: character?.name ?? '',
-              conversationId: String(msg.conversationId ?? ''),
-              editorContext: msg.editorContext ?? {},
-              history: msg.history ?? [],
+              model: 'claude-haiku-4-5-20251001',
+              max_tokens: 300,
+              system: systemPrompt,
+              messages: [...history, { role: 'user', content: transcript }],
             }),
           });
 
-          if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
+          if (!anthropicResp.ok) {
+            const errText = await anthropicResp.text().catch(() => '');
+            throw new Error(`Anthropic API ${anthropicResp.status}: ${errText.slice(0, 200)}`);
           }
 
-          const contentType = response.headers.get('content-type') || '';
-          if (!contentType.includes('application/json')) {
-            throw new Error('Backend must return JSON.');
-          }
-
-          const data = await response.json() as {
-            text?: string;
-            emotion?: string;
-            audioBase64?: string;
-            audioMimeType?: string;
-            audioUrl?: string;
+          const anthropicData = await anthropicResp.json() as {
+            content: Array<{ type: string; text: string }>;
           };
+          const rawText = anthropicData.content?.[0]?.text ?? '';
 
-          let audioBase64 = data.audioBase64 ?? '';
-          let audioMimeType = data.audioMimeType ?? 'audio/mpeg';
+          // Parse [emotion] tag from beginning of response
+          const emotionMatch = rawText.match(/^\[(\w+)\]\s*\n?/);
+          const validEmotions = ['happy', 'sad', 'angry', 'surprised', 'supportive', 'thinking'];
+          let emotion = 'supportive';
+          let cleanText = rawText.trim();
+          if (emotionMatch) {
+            const parsed = emotionMatch[1].toLowerCase();
+            if (validEmotions.includes(parsed)) { emotion = parsed; }
+            cleanText = rawText.slice(emotionMatch[0].length).trim();
+          }
 
-          if (!audioBase64 && data.audioUrl) {
-            const audioResponse = await fetch(data.audioUrl);
-            if (audioResponse.ok) {
-              audioMimeType = audioResponse.headers.get('content-type') || audioMimeType;
-              const bytes = await audioResponse.arrayBuffer();
-              audioBase64 = Buffer.from(bytes).toString('base64');
+          // ElevenLabs TTS — optional, skipped gracefully if not configured
+          let audioBase64 = '';
+          let audioMimeType = 'audio/mpeg';
+          const elevenLabsKey = this._cfg['ELEVENLABS_API_KEY'];
+          const voiceId = character?.voiceId ?? '';
+          if (elevenLabsKey && voiceId && cleanText) {
+            try {
+              const ttsResp = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'xi-api-key': elevenLabsKey,
+                },
+                body: JSON.stringify({
+                  text: cleanText,
+                  model_id: 'eleven_multilingual_v2',
+                  voice_settings: { stability: 0.5, similarity_boost: 0.75 },
+                }),
+              });
+              if (ttsResp.ok) {
+                audioMimeType = ttsResp.headers.get('content-type') || 'audio/mpeg';
+                const bytes = await ttsResp.arrayBuffer();
+                audioBase64 = Buffer.from(bytes).toString('base64');
+              }
+            } catch {
+              // TTS failure is non-fatal — respond without audio
             }
           }
 
           webview.postMessage({
             type: 'backendResponse',
             requestId,
-            text: data.text ?? '',
-            emotion: data.emotion ?? 'supportive',
+            text: cleanText,
+            emotion,
             audioBase64,
             audioMimeType,
           });
@@ -271,7 +311,7 @@ export class CompanionViewProvider implements vscode.WebviewViewProvider {
           webview.postMessage({
             type: 'backendError',
             requestId,
-            message: error instanceof Error ? error.message : 'Backend request failed.',
+            message: error instanceof Error ? error.message : 'AI request failed.',
           });
         }
         break;

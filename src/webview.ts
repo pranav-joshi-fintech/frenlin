@@ -474,24 +474,38 @@ function startLiveWave(): void {
 }
 
 // ── Mic / recognition lifecycle ───────────────────────────────────────────
+function applyMuteUI(muted: boolean): void {
+  const ico1 = document.getElementById('ico-unmuted');
+  const ico2 = document.getElementById('ico-muted');
+  const btn  = document.getElementById('btn-mute');
+  const rip  = document.getElementById('mute-ripple');
+  if (ico1) { ico1.classList.toggle('hidden', muted); }
+  if (ico2) { ico2.classList.toggle('hidden', !muted); }
+  if (btn)  { btn.classList.toggle('muted', muted); }
+  if (rip)  { rip.classList.toggle('hidden', muted); }
+}
+
 async function startListening(): Promise<void> {
   if (isActuallyListening || isMuted) { return; }
 
-  // Prefer to detect SpeechRecognition support before prompting for mic permission
   const SpeechRecCtor: typeof SpeechRecognition|undefined =
     (window as unknown as {SpeechRecognition?: typeof SpeechRecognition}).SpeechRecognition ??
     (window as unknown as {webkitSpeechRecognition?: typeof SpeechRecognition}).webkitSpeechRecognition ??
     (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition;
 
   if (!SpeechRecCtor) {
-    reportError('Speech recognition is not supported in this webview.');
+    // Speech API unavailable in this webview — silently switch to text-only mode
+    isMuted = true;
+    applyMuteUI(true);
     return;
   }
 
   try {
     mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
   } catch {
-    reportError('Microphone permission was denied or unavailable.');
+    // Permission denied or no mic hardware — silently switch to text-only mode
+    isMuted = true;
+    applyMuteUI(true);
     return;
   }
 
@@ -523,7 +537,6 @@ async function startListening(): Promise<void> {
   recognition.onerror = (ev: SpeechRecognitionError) => {
     if (ev.error !== 'no-speech' && ev.error !== 'aborted') {
       console.warn('Recognition error:', ev.error);
-      reportError(`Speech recognition error: ${ev.error}`);
     }
     stopMic();
   };
@@ -555,14 +568,7 @@ function stopMic(): void {
 
 function setMuted(muted: boolean): void {
   isMuted = muted;
-  const ico1 = document.getElementById('ico-unmuted');
-  const ico2 = document.getElementById('ico-muted');
-  const btn  = document.getElementById('btn-mute');
-  const rip  = document.getElementById('mute-ripple');
-  if (ico1) { ico1.classList.toggle('hidden', muted); }
-  if (ico2) { ico2.classList.toggle('hidden', !muted); }
-  if (btn)  { btn.classList.toggle('muted', muted); }
-  if (rip)  { rip.classList.toggle('hidden', muted); }
+  applyMuteUI(muted);
   if (muted) { stopMic(); }
   else       { startListening(); }
 }
@@ -638,88 +644,33 @@ async function handleUserSpeech(text: string): Promise<void> {
   if (isProcessing || !text) { return; }
   isProcessing = true;
   setEmotion('thinking');
-  setDialogue(text, true); // show user text instantly
+  setDialogue(text, true);
   stopMic();
 
-  // save user msg
   if (currentConvoId) {
     vscode.postMessage({ type: 'saveMessage', conversationId: currentConvoId, role: 'user', content: text });
   }
   currentMessages.push({ id: '', role: 'user', content: text, timestamp: Date.now() });
 
-  try {
-    const editorCtx = await requestEditorContext();
-    const history = currentMessages.slice(-10).map(m => ({ role: m.role, content: m.content, emotion: m.emotion }));
-    const response = await fetch(getBackendEndpoint(), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        transcript: text,
-        profileId: activeProfileId,
-        conversationId: currentConvoId,
-        editorContext: editorCtx,
-        history,
-        characterPrompt: activeChar()?.prompt ?? '',
-        voiceId: activeChar()?.voiceId ?? '',
-        characterName: activeChar()?.name ?? '',
-      }),
-    });
+  const editorCtx = await requestEditorContext();
+  const history = currentMessages.slice(-10).map(m => ({ role: m.role, content: m.content, emotion: m.emotion }));
+  const requestId = makeRequestId();
+  activeRequestId = requestId;
 
-    if (!response.ok) {
-      let errorMessage = `HTTP ${response.status}`;
-      try {
-        const errorData = await response.json() as { error?: string };
-        if (errorData?.error) { errorMessage = errorData.error; }
-      } catch {
-        /* ignore parse errors */
-      }
-      throw new Error(errorMessage);
-    }
-
-    const contentType = response.headers.get('content-type') || '';
-    if (!contentType.includes('application/json')) {
-      throw new Error('Backend must return JSON.');
-    }
-
-    const data = await response.json() as {
-      text?: string;
-      emotion?: string;
-      audioBase64?: string;
-      audioMimeType?: string;
-    };
-
-    const clean = String(data.text ?? '').trim();
-    const emotion = String(data.emotion ?? 'supportive');
-
-    setEmotion(emotion);
-    setDialogue(clean, !clean);
-    if (clean) {
-      adviceList.push(clean);
-      adviceIdx = adviceList.length - 1;
-      updateAdviceNav();
-    }
-
-    currentMessages.push({ id: '', role: 'assistant', content: clean, emotion, timestamp: Date.now() });
-    if (currentConvoId) {
-      vscode.postMessage({ type: 'saveMessage', conversationId: currentConvoId, role: 'assistant', content: clean, emotion });
-    }
-
-    const audioBase64 = String(data.audioBase64 ?? '');
-    const audioMimeType = String(data.audioMimeType ?? 'audio/mpeg');
-    if (audioBase64) {
-      playAudioBase64(audioBase64, audioMimeType);
-    }
-  } catch (e) {
-    const message = e instanceof Error ? e.message : 'Backend request failed.';
-    isProcessing = false;
-    activeRequestId = '';
-    reportError(message);
-    return;
-  }
-
-  isProcessing = false;
-  activeRequestId = '';
-  if (!isMuted) { setTimeout(() => startListening(), 600); }
+  // Route through extension host — Anthropic + ElevenLabs called server-side
+  vscode.postMessage({
+    type: 'sendTranscript',
+    requestId,
+    transcript: text,
+    profileId: activeProfileId,
+    conversationId: currentConvoId,
+    editorContext: editorCtx,
+    history,
+    characterPrompt: activeChar()?.prompt ?? '',
+    voiceId: activeChar()?.voiceId ?? '',
+    characterName: activeChar()?.name ?? '',
+  });
+  // Response arrives via window.addEventListener('message') → 'backendResponse' / 'backendError'
 }
 
 function parseReply(text: string): { clean: string; emotion: string } {

@@ -77,11 +77,16 @@ export class CompanionViewProvider implements vscode.WebviewViewProvider {
   private _store: ConversationStore;
   private _cfg: Record<string, string>;
   private _characters: CharacterMeta[];
+  private _backendUrl: string;
 
   constructor(private readonly context: vscode.ExtensionContext) {
     this._store = new ConversationStore(context);
     this._cfg = loadConfig(context.extensionPath);
     this._characters = loadCharacters(context.extensionPath, this._cfg);
+    this._backendUrl = vscode.workspace.getConfiguration('mommyasmr').get<string>('backendUrl')
+      || this._cfg['MOMMYASMR_BACKEND_URL']
+      || this._cfg['FLASK_BACKEND_URL']
+      || 'http://127.0.0.1:5001/respond';
   }
 
   public resolveWebviewView(
@@ -116,7 +121,7 @@ export class CompanionViewProvider implements vscode.WebviewViewProvider {
       activeProfile,
       conversations: this._store.getAllConversations(),
       currentId: this._store.getCurrentId(),
-      anthropicKey: this._cfg['ANTHROPIC_API_KEY'] || '',
+      backendUrl: this._backendUrl,
       elevenLabsKey: this._cfg['ELEVENLABS_API_KEY'] || '',
       emotionUris: this._buildEmotionUris(webviewView.webview),
     };
@@ -178,6 +183,81 @@ export class CompanionViewProvider implements vscode.WebviewViewProvider {
         webview.postMessage({ type: 'conversationsUpdated', conversations: this._store.getAllConversations(), currentId: this._store.getCurrentId() });
         break;
       }
+      case 'sendTranscript': {
+        const requestId = String(msg.requestId ?? '');
+        const transcript = String(msg.transcript ?? '').trim();
+        const profileId = String(msg.profileId ?? '');
+        const character = this._characters.find((entry) => entry.id === profileId);
+        if (!transcript) {
+          webview.postMessage({ type: 'backendError', requestId, message: 'Empty transcript.' });
+          break;
+        }
+        if (!this._backendUrl) {
+          webview.postMessage({ type: 'backendError', requestId, message: 'Backend URL is not configured.' });
+          break;
+        }
+        try {
+          const response = await fetch(this._backendUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              transcript,
+              profileId,
+              characterPrompt: character?.prompt ?? '',
+              voiceId: character?.voiceId ?? '',
+              characterName: character?.name ?? '',
+              conversationId: String(msg.conversationId ?? ''),
+              editorContext: msg.editorContext ?? {},
+              history: msg.history ?? [],
+            }),
+          });
+
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+
+          const contentType = response.headers.get('content-type') || '';
+          if (!contentType.includes('application/json')) {
+            throw new Error('Backend must return JSON.');
+          }
+
+          const data = await response.json() as {
+            text?: string;
+            emotion?: string;
+            audioBase64?: string;
+            audioMimeType?: string;
+            audioUrl?: string;
+          };
+
+          let audioBase64 = data.audioBase64 ?? '';
+          let audioMimeType = data.audioMimeType ?? 'audio/mpeg';
+
+          if (!audioBase64 && data.audioUrl) {
+            const audioResponse = await fetch(data.audioUrl);
+            if (audioResponse.ok) {
+              audioMimeType = audioResponse.headers.get('content-type') || audioMimeType;
+              const bytes = await audioResponse.arrayBuffer();
+              audioBase64 = Buffer.from(bytes).toString('base64');
+            }
+          }
+
+          webview.postMessage({
+            type: 'backendResponse',
+            requestId,
+            text: data.text ?? '',
+            emotion: data.emotion ?? 'supportive',
+            audioBase64,
+            audioMimeType,
+          });
+        } catch (error) {
+          webview.postMessage({
+            type: 'backendError',
+            requestId,
+            message: error instanceof Error ? error.message : 'Backend request failed.',
+          });
+        }
+        break;
+      }
       case 'setActiveProfile': {
         await this.context.globalState.update('mommyasmr.activeProfile', msg.profile as string);
         break;
@@ -232,7 +312,7 @@ export class CompanionViewProvider implements vscode.WebviewViewProvider {
              script-src 'nonce-${nonce}';
              style-src ${webview.cspSource} 'unsafe-inline';
              media-src ${webview.cspSource} blob:;
-             connect-src https:;"/>
+             connect-src https: http://127.0.0.1:5001 http://127.0.0.1:5000 http://localhost:5001 http://localhost:5000;"/>
   <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
   <link rel="stylesheet" href="${styleUri}"/>
   <title>MommyASMR</title>

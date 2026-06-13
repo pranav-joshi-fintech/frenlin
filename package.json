@@ -8,8 +8,18 @@
   "categories": ["Other"],
   "main": "./out/extension.js",
   "contributes": {
+    "configuration": {
+      "title": "MommyASMR",
+      "properties": {
+        "mommyasmr.backendUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:5001/respond",
+          "description": "Flask backend endpoint that receives transcripts and returns a response payload."
+        }
+      }
+    },
     "viewsContainers": {
-      "panel": [
+      "activitybar": [
         {
           "id": "mommyasmr-sidebar",
           "title": "MommyASMR",
@@ -27,7 +37,7 @@
       ]
     },
     "commands": [
-      { "command": "mommyasmr.openPanel",          "title": "Open Companion Panel",       "category": "MommyASMR" },
+      { "command": "mommyasmr.openPanel",          "title": "Open Companion",             "category": "MommyASMR" },
       { "command": "mommyasmr.newConversation",     "title": "New Conversation",           "category": "MommyASMR" },
       { "command": "mommyasmr.deleteConversation",  "title": "Delete Conversation",        "category": "MommyASMR" },
       { "command": "mommyasmr.toggleHistory",       "title": "Toggle Session History",     "category": "MommyASMR" },

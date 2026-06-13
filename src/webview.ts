@@ -24,12 +24,13 @@ let currentConvoId: string|null           = null;
 let currentMessages: Message[]            = [];
 let adviceList: string[]                  = [];
 let adviceIdx                             = 0;
-let anthropicKey                          = '';
+let backendUrl                            = '';
 let elevenLabsKey                         = '';
 let historyOpen                           = false;
 let isMuted                               = false;   // starts UNMUTED = always listening
 let isProcessing                          = false;
 let typewriterTimer: ReturnType<typeof setInterval>|null = null;
+let activeRequestId                        = '';
 
 // audio
 let audioCtx: AudioContext|null           = null;
@@ -80,100 +81,107 @@ const make = (tag: string, cls?: string, html?: string) => {
 // ── Root render ───────────────────────────────────────────────────────────
 function renderApp(): void {
   document.getElementById('root')!.innerHTML = `
-  <!-- History drawer -->
-  <div id="history-panel" class="history-panel hidden">
-    <div class="history-header">
-      <span class="mono dim">// sessions</span>
-      <button id="btn-close-hist" class="icon-btn" title="Close">✕</button>
-    </div>
-    <ul id="history-list" class="history-list"></ul>
-    <div class="history-footer">
-      <button id="btn-new-hist" class="hist-action-btn">+ New session</button>
-    </div>
-  </div>
-
-  <!-- Main panel -->
-  <div id="main" class="main">
-
-    <!-- ① Top bar -->
-    <div class="topbar">
-      <button id="btn-hist" class="topbar-btn" title="Sessions">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="3" cy="6" r="1" fill="currentColor"/><circle cx="3" cy="12" r="1" fill="currentColor"/><circle cx="3" cy="18" r="1" fill="currentColor"/></svg>
-      </button>
-      <button id="btn-rename" class="topbar-btn" title="Rename session">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-      </button>
-      <span id="session-title" class="session-title">New session</span>
-      <button id="btn-new" class="topbar-btn" title="New session">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-      </button>
-      <button id="btn-del" class="topbar-btn danger" title="Delete session">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
-      </button>
-    </div>
-
-    <!-- ② Avatar frame (gold border, concept art style) -->
-    <div id="avatar-wrap" class="avatar-wrap">
-      <div id="avatar-frame" class="avatar-frame">
-        <img id="avatar-img" class="avatar-img" src="" alt="companion" draggable="false"/>
-        <div id="avatar-placeholder" class="avatar-placeholder">
-          <div class="placeholder-icon">✦</div>
-        </div>
+  <div class="shell">
+    <!-- History drawer -->
+    <div id="history-panel" class="history-panel hidden">
+      <div class="history-header">
+        <span class="mono dim">// sessions</span>
+        <button id="btn-close-hist" class="icon-btn" title="Close">✕</button>
+      </div>
+      <ul id="history-list" class="history-list"></ul>
+      <div class="history-footer">
+        <button id="btn-new-hist" class="hist-action-btn">+ New session</button>
       </div>
     </div>
 
-    <!-- ③ Emotion status + voice selector -->
-    <div class="status-row">
-      <span id="emotion-tag" class="emotion-tag accent-text">// ready</span>
-      <button id="btn-voice" class="voice-btn accent-btn">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
-        <span id="voice-label">Voice</span>
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
-      </button>
-    </div>
+    <!-- Main panel -->
+    <div id="main" class="main">
+      <div class="topbar">
+        <button id="btn-hist" class="topbar-btn" title="Sessions">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="3" cy="6" r="1" fill="currentColor"/><circle cx="3" cy="12" r="1" fill="currentColor"/><circle cx="3" cy="18" r="1" fill="currentColor"/></svg>
+        </button>
+        <button id="btn-rename" class="topbar-btn" title="Rename session">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+        </button>
+        <span id="session-title" class="session-title">New session</span>
+        <button id="btn-new" class="topbar-btn" title="New session">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        </button>
+        <button id="btn-del" class="topbar-btn danger" title="Delete session">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
+        </button>
+      </div>
 
-    <!-- Voice dropdown (hidden by default) -->
-    <div id="voice-dropdown" class="voice-dropdown hidden"></div>
+      <div class="status-row">
+        <span id="emotion-tag" class="emotion-tag accent-text">// ready</span>
+        <button id="btn-voice" class="voice-btn accent-btn">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+          <span id="voice-label">Voice</span>
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+      </div>
 
-    <!-- ④ Waveform -->
-    <div class="wave-container">
-      <canvas id="waveform" class="waveform"></canvas>
-    </div>
+      <div id="voice-dropdown" class="voice-dropdown hidden"></div>
 
-    <!-- ⑤ Subtitle / dialogue box -->
-    <div class="dialogue-box">
-      <div id="dialogue" class="dialogue-text"></div>
-    </div>
+      <div class="wave-container">
+        <canvas id="waveform" class="waveform"></canvas>
+      </div>
 
-    <!-- ⑥ Quote / advice nav -->
-    <div class="advice-row">
-      <button id="btn-prev" class="adv-btn">‹</button>
-      <span id="adv-counter" class="adv-counter mono dim">—</span>
-      <button id="btn-next" class="adv-btn">›</button>
-    </div>
+      <div class="dialogue-box">
+        <div id="dialogue" class="dialogue-text"></div>
+      </div>
+      
+        <div class="composer-row">
+          <textarea id="composer-input" class="composer-input" rows="2" placeholder="Type a message if the mic is being stubborn..."></textarea>
+          <button id="composer-send" class="composer-send" title="Send message">Send</button>
+        </div>
 
-    <!-- ⑦ Mute toggle (the "mic") -->
-    <div class="mic-row">
-      <button id="btn-mute" class="mute-btn" title="Toggle microphone">
-        <svg id="ico-unmuted" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
-          <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
-          <line x1="12" y1="19" x2="12" y2="23"/>
-          <line x1="8" y1="23" x2="16" y2="23"/>
-        </svg>
-        <svg id="ico-muted" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="hidden">
-          <line x1="1" y1="1" x2="23" y2="23"/>
-          <path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"/>
-          <path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23"/>
-          <line x1="12" y1="19" x2="12" y2="23"/>
-          <line x1="8" y1="23" x2="16" y2="23"/>
-        </svg>
-        <div id="mute-ripple" class="mute-ripple"></div>
-      </button>
-    </div>
+      <div class="advice-row">
+        <button id="btn-prev" class="adv-btn">‹</button>
+        <span id="adv-counter" class="adv-counter mono dim">—</span>
+        <button id="btn-next" class="adv-btn">›</button>
+      </div>
 
-  </div><!-- /main -->
+      <div class="mic-row">
+        <button id="btn-mute" class="mute-btn" title="Toggle microphone">
+          <svg id="ico-unmuted" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+            <line x1="12" y1="19" x2="12" y2="23"/>
+            <line x1="8" y1="23" x2="16" y2="23"/>
+          </svg>
+          <svg id="ico-muted" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="hidden">
+            <line x1="1" y1="1" x2="23" y2="23"/>
+            <path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"/>
+            <path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23"/>
+            <line x1="12" y1="19" x2="12" y2="23"/>
+            <line x1="8" y1="23" x2="16" y2="23"/>
+          </svg>
+          <div id="mute-ripple" class="mute-ripple"></div>
+        </button>
+      </div>
+    </div><!-- /main -->
+
+    <aside class="avatar-rail" aria-label="Character preview">
+      <div class="avatar-wrap expression-float">
+        <div id="avatar-frame" class="avatar-frame expression-card">
+          <img id="avatar-img" class="avatar-img expression-img" src="" alt="expression" draggable="false"/>
+          <div id="avatar-placeholder" class="avatar-placeholder expression-placeholder">
+            <div class="placeholder-icon">✦</div>
+          </div>
+        </div>
+      </div>
+    </aside>
+  </div>
   `;
+}
+
+function sendComposerMessage(): void {
+  const input = document.getElementById('composer-input') as HTMLTextAreaElement | null;
+  const text = input?.value.trim() ?? '';
+  if (!text) { return; }
+  if (input) { input.value = ''; }
+  void handleUserSpeech(text);
 }
 
 // ── Profile helpers ───────────────────────────────────────────────────────
@@ -397,12 +405,15 @@ async function startListening(): Promise<void> {
     (window as unknown as {webkitSpeechRecognition?: typeof SpeechRecognition}).webkitSpeechRecognition ??
     (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition;
 
-  if (!SpeechRecCtor) { return; }
+  if (!SpeechRecCtor) {
+    reportError('Speech recognition is not supported in this webview.');
+    return;
+  }
 
   try {
     mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
   } catch {
-    // silently fail — NotAllowedError happens when no perms
+    reportError('Microphone permission was denied or unavailable.');
     return;
   }
 
@@ -434,10 +445,9 @@ async function startListening(): Promise<void> {
   recognition.onerror = (ev: SpeechRecognitionError) => {
     if (ev.error !== 'no-speech' && ev.error !== 'aborted') {
       console.warn('Recognition error:', ev.error);
+      reportError(`Speech recognition error: ${ev.error}`);
     }
     stopMic();
-    // auto-restart unless muted
-    if (!isMuted) { setTimeout(() => startListening(), 600); }
   };
 
   recognition.onend = () => {
@@ -517,12 +527,41 @@ function buildSystemPrompt(base: string, ctx: EditorContext): string {
   return `${base}\n\n[Editor context — ${parts.join(' | ')}]`;
 }
 
+function makeRequestId(): string {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function getBackendEndpoint(): string {
+  return backendUrl || 'http://127.0.0.1:5001/respond';
+}
+
+function reportError(message: string): void {
+  setDialogue(message, true);
+  setEmotion('sad');
+  vscode.postMessage({ type: 'showError', text: message });
+}
+
+function playAudioBase64(audioBase64: string, mimeType: string): void {
+  if (!audioBase64) { return; }
+  const binary = atob(audioBase64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  const blob = new Blob([bytes], { type: mimeType || 'audio/mpeg' });
+  const url = URL.createObjectURL(blob);
+  const audio = new Audio(url);
+  audio.play().catch(() => { /* autoplay can be blocked */ });
+  audio.onended = () => URL.revokeObjectURL(url);
+}
+
 // ── AI call ───────────────────────────────────────────────────────────────
 async function handleUserSpeech(text: string): Promise<void> {
   if (isProcessing || !text) { return; }
   isProcessing = true;
   setEmotion('thinking');
   setDialogue(text, true); // show user text instantly
+  stopMic();
 
   // save user msg
   if (currentConvoId) {
@@ -530,83 +569,79 @@ async function handleUserSpeech(text: string): Promise<void> {
   }
   currentMessages.push({ id: '', role: 'user', content: text, timestamp: Date.now() });
 
-  const char = activeChar();
-  if (!char) { isProcessing = false; return; }
-
-  // Build history (last 10 messages)
-  const history = currentMessages.slice(-10).map(m => ({ role: m.role, content: m.content }));
-
   try {
     const editorCtx = await requestEditorContext();
-    const systemPrompt = buildSystemPrompt(char.prompt, editorCtx);
-    const reply = await callClaude(systemPrompt, history);
-    const { clean, emotion } = parseReply(reply);
+    const history = currentMessages.slice(-10).map(m => ({ role: m.role, content: m.content, emotion: m.emotion }));
+    const response = await fetch(getBackendEndpoint(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        transcript: text,
+        profileId: activeProfileId,
+        conversationId: currentConvoId,
+        editorContext: editorCtx,
+        history,
+        characterPrompt: activeChar()?.prompt ?? '',
+        voiceId: activeChar()?.voiceId ?? '',
+        characterName: activeChar()?.name ?? '',
+      }),
+    });
+
+    if (!response.ok) {
+      let errorMessage = `HTTP ${response.status}`;
+      try {
+        const errorData = await response.json() as { error?: string };
+        if (errorData?.error) { errorMessage = errorData.error; }
+      } catch {
+        /* ignore parse errors */
+      }
+      throw new Error(errorMessage);
+    }
+
+    const contentType = response.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+      throw new Error('Backend must return JSON.');
+    }
+
+    const data = await response.json() as {
+      text?: string;
+      emotion?: string;
+      audioBase64?: string;
+      audioMimeType?: string;
+    };
+
+    const clean = String(data.text ?? '').trim();
+    const emotion = String(data.emotion ?? 'supportive');
 
     setEmotion(emotion);
-    setDialogue(clean); // typewriter
-
-    adviceList.push(clean);
-    adviceIdx = adviceList.length - 1;
-    updateAdviceNav();
+    setDialogue(clean, !clean);
+    if (clean) {
+      adviceList.push(clean);
+      adviceIdx = adviceList.length - 1;
+      updateAdviceNav();
+    }
 
     currentMessages.push({ id: '', role: 'assistant', content: clean, emotion, timestamp: Date.now() });
     if (currentConvoId) {
       vscode.postMessage({ type: 'saveMessage', conversationId: currentConvoId, role: 'assistant', content: clean, emotion });
     }
 
-    // TTS
-    if (elevenLabsKey && char.voiceId) {
-      speakElevenLabs(clean, elevenLabsKey, char.voiceId).catch(() => { /* optional */ });
+    const audioBase64 = String(data.audioBase64 ?? '');
+    const audioMimeType = String(data.audioMimeType ?? 'audio/mpeg');
+    if (audioBase64) {
+      playAudioBase64(audioBase64, audioMimeType);
     }
   } catch (e) {
-    setDialogue('Something went wrong — want to try again?', true);
-    setEmotion('sad');
-  } finally {
+    const message = e instanceof Error ? e.message : 'Backend request failed.';
     isProcessing = false;
-    if (!isMuted) { setTimeout(() => startListening(), 600); }
+    activeRequestId = '';
+    reportError(message);
+    return;
   }
-}
 
-async function callClaude(
-  systemPrompt: string,
-  history: Array<{role: string; content: string}>
-): Promise<string> {
-  if (!anthropicKey) { throw new Error('No Anthropic API key'); }
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': anthropicKey,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true',
-    },
-    body: JSON.stringify({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 300,
-      system: systemPrompt,
-      messages: history.map(m => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.content })),
-    }),
-  });
-  if (!res.ok) {
-    const e = await res.json().catch(() => ({})) as {error?: {message: string}};
-    throw new Error(e.error?.message ?? `HTTP ${res.status}`);
-  }
-  const d = await res.json() as {content: Array<{type: string; text: string}>};
-  return d.content.filter(b => b.type === 'text').map(b => b.text).join('');
-}
-
-async function speakElevenLabs(text: string, key: string, voiceId: string): Promise<void> {
-  const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
-    method: 'POST',
-    headers: { 'xi-api-key': key, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, model_id: 'eleven_monolingual_v1', voice_settings: { stability: 0.5, similarity_boost: 0.75 } }),
-  });
-  if (!res.ok) { return; }
-  const blob = await res.blob();
-  const url  = URL.createObjectURL(blob);
-  const audio = new Audio(url);
-  audio.play().catch(() => { /* autoplay blocked */ });
-  audio.onended = () => URL.revokeObjectURL(url);
+  isProcessing = false;
+  activeRequestId = '';
+  if (!isMuted) { setTimeout(() => startListening(), 600); }
 }
 
 function parseReply(text: string): { clean: string; emotion: string } {
@@ -649,6 +684,14 @@ function bindEvents(): void {
   el('btn-mute').addEventListener('click', () => setMuted(!isMuted));
   el('btn-prev').addEventListener('click', () => showAdvice(adviceIdx - 1));
   el('btn-next').addEventListener('click', () => showAdvice(adviceIdx + 1));
+  el('composer-send').addEventListener('click', () => sendComposerMessage());
+  el('composer-input').addEventListener('keydown', (event) => {
+    const keyboardEvent = event as KeyboardEvent;
+    if (keyboardEvent.key === 'Enter' && !keyboardEvent.shiftKey) {
+      keyboardEvent.preventDefault();
+      sendComposerMessage();
+    }
+  });
 }
 
 // ── VS Code message handler ───────────────────────────────────────────────
@@ -659,7 +702,7 @@ window.addEventListener('message', (ev) => {
     case 'init': {
       characters    = (msg.characters    as CharacterMeta[]) ?? [];
       emotionUris   = (msg.emotionUris   as Record<string, EmotionUris>) ?? {};
-      anthropicKey  = (msg.anthropicKey  as string) ?? '';
+      backendUrl    = (msg.backendUrl    as string) ?? '';
       elevenLabsKey = (msg.elevenLabsKey as string) ?? '';
       conversations = (msg.conversations as Conversation[]) ?? [];
       currentConvoId = (msg.currentId    as string) ?? null;
@@ -690,6 +733,51 @@ window.addEventListener('message', (ev) => {
       // Start listening immediately (unmuted by default)
       startIdleWave();
       startListening();
+      break;
+    }
+
+    case 'backendResponse': {
+      if (activeRequestId && (msg.requestId as string) !== activeRequestId) { break; }
+      const clean = String(msg.text ?? '').trim();
+      const emotion = String(msg.emotion ?? 'supportive');
+
+      setEmotion(emotion);
+      setDialogue(clean, !clean);
+      if (clean) {
+        adviceList.push(clean);
+        adviceIdx = adviceList.length - 1;
+        updateAdviceNav();
+      }
+
+      currentMessages.push({ id: '', role: 'assistant', content: clean, emotion, timestamp: Date.now() });
+      if (currentConvoId) {
+        vscode.postMessage({ type: 'saveMessage', conversationId: currentConvoId, role: 'assistant', content: clean, emotion });
+      }
+
+      const audioBase64 = String(msg.audioBase64 ?? '');
+      const audioMimeType = String(msg.audioMimeType ?? 'audio/mpeg');
+      if (audioBase64) {
+        playAudioBase64(audioBase64, audioMimeType);
+      }
+
+      const composerInput = document.getElementById('composer-input') as HTMLTextAreaElement | null;
+      if (composerInput) { composerInput.disabled = false; }
+
+      isProcessing = false;
+      activeRequestId = '';
+      if (!isMuted) { setTimeout(() => startListening(), 600); }
+      break;
+    }
+
+    case 'backendError': {
+      if (activeRequestId && (msg.requestId as string) !== activeRequestId) { break; }
+      setDialogue(String(msg.message ?? 'Backend request failed.'), true);
+      setEmotion('sad');
+      const composerInput = document.getElementById('composer-input') as HTMLTextAreaElement | null;
+      if (composerInput) { composerInput.disabled = false; }
+      isProcessing = false;
+      activeRequestId = '';
+      if (!isMuted) { setTimeout(() => startListening(), 600); }
       break;
     }
 

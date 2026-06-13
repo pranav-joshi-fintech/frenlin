@@ -38,6 +38,7 @@ let quoteTimer: ReturnType<typeof setInterval>|null = null;
 
 // audio
 let audioCtx: AudioContext|null           = null;
+let playbackCtx: AudioContext|null        = null;   // drives the wave during TTS playback
 let analyser: AnalyserNode|null           = null;
 let mediaStream: MediaStream|null         = null;
 let mediaRecorder: MediaRecorder|null     = null;
@@ -646,8 +647,38 @@ function playAudioBase64(audioBase64: string, mimeType: string): void {
   const blob = new Blob([bytes], { type: mimeType || 'audio/mpeg' });
   const url = URL.createObjectURL(blob);
   const audio = new Audio(url);
-  audio.play().catch(() => { /* autoplay can be blocked */ });
-  audio.onended = () => URL.revokeObjectURL(url);
+
+  let done = false;
+  const cleanup = (): void => {
+    if (done) { return; }
+    done = true;
+    URL.revokeObjectURL(url);
+    if (!isRecording) {
+      analyser = null;
+      if (playbackCtx) { try { void playbackCtx.close(); } catch { /* */ } playbackCtx = null; }
+      startIdleWave();
+    }
+  };
+
+  // Drive the waveform from the real TTS audio (unless the mic is mid-recording).
+  if (!isRecording) {
+    try {
+      const ctx = new AudioContext();
+      const srcNode = ctx.createMediaElementSource(audio);
+      const an = ctx.createAnalyser();
+      an.fftSize = 1024;
+      srcNode.connect(an);
+      an.connect(ctx.destination);   // keep audio audible
+      void ctx.resume();
+      playbackCtx = ctx;
+      analyser = an;                 // startLiveWave reads this global
+      startLiveWave();
+    } catch { /* visualization is optional; audio still plays below */ }
+  }
+
+  audio.onended = cleanup;
+  audio.onerror = cleanup;
+  audio.play().catch(() => { cleanup(); /* autoplay can be blocked */ });
 }
 
 // ── AI call ───────────────────────────────────────────────────────────────

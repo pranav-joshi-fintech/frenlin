@@ -18,12 +18,13 @@ load_dotenv(_BACKEND_DIR / ".env")
 app = Flask(__name__)
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash").strip()
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip()
 GEMINI_MODEL_FALLBACKS = [
     m.strip()
     for m in os.getenv(
         "GEMINI_MODEL_FALLBACKS",
-        "gemini-2.5-flash,gemini-2.0-flash-lite,gemini-1.5-flash",
+        # gemini-1.5-flash was retired (404); these are the models that still serve.
+        "gemini-flash-latest,gemini-2.5-flash-lite,gemini-2.0-flash",
     ).split(",")
     if m.strip()
 ]
@@ -92,16 +93,27 @@ def generate_with_gemini(
     from google.genai import types
 
     client = get_gemini_client()
-    config_kwargs: Dict[str, Any] = {
+    base_kwargs: Dict[str, Any] = {
         "system_instruction": system_prompt,
         "temperature": 0.7,
-        "max_output_tokens": 220,
+        "max_output_tokens": 400,
     }
     if json_mode:
-        config_kwargs["response_mime_type"] = "application/json"
+        base_kwargs["response_mime_type"] = "application/json"
+
+    # gemini-2.5 / *-latest are "thinking" models: without this they spend the output
+    # budget on hidden reasoning and the real answer comes back truncated/empty.
+    thinking_cfg = None
+    try:
+        thinking_cfg = types.ThinkingConfig(thinking_budget=0)
+    except Exception:
+        thinking_cfg = None
 
     last_error: Optional[Exception] = None
     for model in gemini_models_to_try():
+        config_kwargs = dict(base_kwargs)
+        if thinking_cfg is not None and ("2.5" in model or "latest" in model):
+            config_kwargs["thinking_config"] = thinking_cfg
         try:
             response = client.models.generate_content(
                 model=model,
@@ -142,6 +154,45 @@ def classify_emotion(text: str) -> str:
     return "supportive"
 
 
+_EMOJI_RE = re.compile(
+    "["
+    "\U0001F300-\U0001FAFF"  # symbols, pictographs, emoji
+    "\U00002600-\U000027BF"  # misc symbols + dingbats
+    "\U0001F1E6-\U0001F1FF"  # flags
+    "\U00002190-\U000021FF"  # arrows
+    "\U00002B00-\U00002BFF"  # misc symbols/arrows
+    "️"                  # variation selector
+    "]+",
+    flags=re.UNICODE,
+)
+
+
+def extract_spoken_text(raw: str) -> str:
+    """Dig the "text" field out of a noisy/partial JSON reply, else return raw."""
+    match = re.search(r'"text"\s*:\s*"((?:[^"\\]|\\.)*)"', raw)
+    if match:
+        try:
+            return bytes(match.group(1), "utf-8").decode("unicode_escape")
+        except Exception:
+            return match.group(1)
+    return raw
+
+
+def sanitize_for_speech(text: str) -> str:
+    """Strip anything a TTS voice should not read aloud (emojis, emoticons, markdown,
+    code, stray JSON punctuation, 'here is the JSON' preambles)."""
+    s = text.strip()
+    s = re.sub(r"```.*?```", " ", s, flags=re.DOTALL)          # fenced code blocks
+    s = s.replace("`", "")
+    s = re.sub(r"(?i)^\s*here\s+(?:is|'?s)\b[^:]*:\s*", "", s)  # 'Here is the JSON:' preamble
+    s = _EMOJI_RE.sub("", s)
+    s = re.sub(r"[:;=8xX][-o^']?[)(\[\]dDpP3>|\\/]+", "", s)    # ASCII emoticons :) :D x)
+    s = re.sub(r"[*_#>~|]", "", s)                              # markdown / table chars
+    s = s.replace("{", "").replace("}", "").replace('"', "")    # leftover JSON punctuation
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
 def safe_json_loads(text: str) -> Dict[str, Any]:
     try:
         return json.loads(text)
@@ -156,9 +207,14 @@ def build_system_prompt(character_prompt: str, character_name: str) -> str:
     role = character_name or "the companion"
     return (
         f"You are {role}, a voice-reactive VS Code companion. "
-        "Answer in plain language, keep replies short, and return JSON only. "
+        "Reply with ONLY a single JSON object and nothing else — no preamble, no "
+        "explanation, no 'here is the JSON', no markdown fences. "
         'The JSON schema is {"text":"...","emotion":"happy|sad|angry|surprised|supportive|thinking|concerned"}. '
-        "Use the emotion to match tone. Do not include markdown fences."
+        "The \"text\" value will be read aloud by a text-to-speech voice, so it MUST be "
+        "one to three natural spoken sentences of plain English. In \"text\" do NOT use "
+        "emojis, emoticons (like :) or :D), markdown, asterisks, backticks, code blocks, "
+        "bullet points, URLs, file paths, or any symbols a person would not say out loud. "
+        "Spell things out as words. Put the feeling in the \"emotion\" field, not in symbols."
         + (f"\n\nPersona prompt:\n{character_prompt.strip()}" if character_prompt.strip() else "")
     )
 
@@ -206,12 +262,16 @@ def call_gemini(
 
     try:
         parsed = safe_json_loads(text)
-        return {
-            "text": str(parsed.get("text", "")).strip() or text,
-            "emotion": str(parsed.get("emotion", "supportive")).strip() or "supportive",
-        }
+        spoken = str(parsed.get("text", "")).strip() or extract_spoken_text(text)
+        emotion = str(parsed.get("emotion", "supportive")).strip() or "supportive"
     except Exception:
-        return {"text": text.strip(), "emotion": classify_emotion(text)}
+        spoken = extract_spoken_text(text.strip())
+        emotion = classify_emotion(text)
+
+    spoken = sanitize_for_speech(spoken)
+    if not spoken:
+        spoken = "Let me think about that for a second."
+    return {"text": spoken, "emotion": emotion}
 
 
 def record_audio(seconds: float) -> str:
@@ -460,4 +520,6 @@ def respond() -> Any:
 
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=PORT, debug=True)
+    # use_reloader=False: the stat reloader was watching the system Python stdlib and
+    # restarting on every file-touch, dropping in-flight requests. Disable for stability.
+    app.run(host="127.0.0.1", port=PORT, debug=True, use_reloader=False)

@@ -1,5 +1,6 @@
 https://elevenlabs.io/app/voice-library?voiceId=uIZsnBL0YK1S5j69bAih - Frieran
 https://elevenlabs.io/app/voice-library?voiceId=wzVFxVZCBIi6KBxNhQDI - Nanami
+https://elevenlabs.io/app/voice-library?voiceId=XJ2fW4ybq7HouelYYGcL - Zoey
 https://elevenlabs.io/app/voice-library?voiceId=zYcjlYFOd3taleS0gkk3 - Vegeta
 
 sk_0fde2dc3d8e13c1b23e89fc03f46c52261767fb61653a261 - Elevenlabs key

@@ -100,6 +100,25 @@ def generate_with_gemini(
     }
     if json_mode:
         base_kwargs["response_mime_type"] = "application/json"
+        # A response_schema forces structured output — the model literally cannot return
+        # prose like "Here's your JSON...". This is the hard guarantee on top of the prompt.
+        try:
+            base_kwargs["response_schema"] = types.Schema(
+                type=types.Type.OBJECT,
+                properties={
+                    "text": types.Schema(type=types.Type.STRING),
+                    "emotion": types.Schema(
+                        type=types.Type.STRING,
+                        enum=[
+                            "happy", "sad", "angry", "surprised",
+                            "supportive", "thinking", "concerned",
+                        ],
+                    ),
+                },
+                required=["text", "emotion"],
+            )
+        except Exception:
+            pass
 
     # gemini-2.5 / *-latest are "thinking" models: without this they spend the output
     # budget on hidden reasoning and the real answer comes back truncated/empty.

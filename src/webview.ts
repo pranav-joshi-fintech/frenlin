@@ -18,7 +18,7 @@ const vscode = acquireVsCodeApi();
 // ── State ─────────────────────────────────────────────────────────────────
 let characters: CharacterMeta[]           = [];
 let emotionUris: Record<string, EmotionUris> = {};
-let activeProfileId  = 'vegeta';
+let activeProfileId  = 'frieran';
 let conversations: Conversation[]         = [];
 let currentConvoId: string|null           = null;
 let currentMessages: Message[]            = [];
@@ -354,8 +354,35 @@ function renderHistory(): void {
       vscode.postMessage({ type: 'selectConversation', id: cv.id });
       toggleHistory(false);
     });
+    li.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      const me = e as MouseEvent;
+      showConvoMenu(me.clientX, me.clientY, cv.id);
+    });
     list.appendChild(li);
   }
+}
+
+function closeConvoMenu(): void {
+  document.getElementById('convo-context-menu')?.remove();
+}
+
+function showConvoMenu(x: number, y: number, convoId: string): void {
+  closeConvoMenu();
+  const menu = make('div', 'context-menu');
+  menu.id = 'convo-context-menu';
+  const del = make('button', 'context-menu-item danger', 'Delete');
+  del.addEventListener('click', (e) => {
+    e.stopPropagation();
+    vscode.postMessage({ type: 'deleteConversation', id: convoId });
+    closeConvoMenu();
+  });
+  menu.appendChild(del);
+  document.body.appendChild(menu);
+  // keep the menu inside the viewport
+  const rect = menu.getBoundingClientRect();
+  menu.style.left = `${Math.min(x, window.innerWidth  - rect.width  - 6)}px`;
+  menu.style.top  = `${Math.min(y, window.innerHeight - rect.height - 6)}px`;
 }
 
 function toggleHistory(force?: boolean): void {
@@ -660,6 +687,13 @@ function playAudioBase64(audioBase64: string, mimeType: string): void {
     }
   };
 
+  const startPlayback = (): void => {
+    audio.play().catch(() => { cleanup(); /* autoplay can be blocked */ });
+  };
+
+  audio.onended = cleanup;
+  audio.onerror = cleanup;
+
   // Drive the waveform from the real TTS audio (unless the mic is mid-recording).
   if (!isRecording) {
     try {
@@ -669,16 +703,23 @@ function playAudioBase64(audioBase64: string, mimeType: string): void {
       an.fftSize = 1024;
       srcNode.connect(an);
       an.connect(ctx.destination);   // keep audio audible
-      void ctx.resume();
       playbackCtx = ctx;
       analyser = an;                 // startLiveWave reads this global
       startLiveWave();
-    } catch { /* visualization is optional; audio still plays below */ }
+      // A media element routed through a *suspended* AudioContext is SILENT, which is
+      // the "first response has no sound" glitch. Resume first, then play.
+      if (ctx.state === 'suspended') {
+        ctx.resume().then(startPlayback).catch(startPlayback);
+      } else {
+        startPlayback();
+      }
+    } catch {
+      // Web Audio unavailable — fall back to plain playback (no visualization).
+      startPlayback();
+    }
+  } else {
+    startPlayback();
   }
-
-  audio.onended = cleanup;
-  audio.onerror = cleanup;
-  audio.play().catch(() => { cleanup(); /* autoplay can be blocked */ });
 }
 
 // ── AI call ───────────────────────────────────────────────────────────────
@@ -749,7 +790,7 @@ function bindEvents(): void {
     buildVoiceDropdown();
     toggleDropdown();
   });
-  document.addEventListener('click', () => closeDropdown());
+  document.addEventListener('click', () => { closeDropdown(); closeConvoMenu(); });
   el('btn-mute').addEventListener('click', () => { if (isRecording) { stopRecording(); } else { void startRecording(); } });
   el('btn-prev').addEventListener('click', () => showAdvice(adviceIdx - 1));
   el('btn-next').addEventListener('click', () => showAdvice(adviceIdx + 1));
@@ -777,7 +818,8 @@ window.addEventListener('message', (ev) => {
       elevenLabsKey = (msg.elevenLabsKey as string) ?? '';
       conversations = (msg.conversations as Conversation[]) ?? [];
       currentConvoId = (msg.currentId    as string) ?? null;
-      activeProfileId = (msg.activeProfile as string) ?? (characters[0]?.id ?? 'vegeta');
+      quotesList    = (msg.quotes        as string[]) ?? [];
+      activeProfileId = (msg.activeProfile as string) ?? (characters[0]?.id ?? 'frieran');
 
       applyProfile(activeProfileId);
       renderHistory();

@@ -116,6 +116,28 @@ body.vscode-light {
 }
 .hist-action-btn:hover { border-color: var(--char-color); color: var(--char-color); }
 
+/* ── Right-click context menu (conversation list) ───────────────────────── */
+.context-menu {
+  position: fixed; z-index: 400;
+  min-width: 130px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 28px rgba(0,0,0,0.45);
+  padding: 4px;
+  animation: dropIn 0.1s ease;
+}
+.context-menu-item {
+  display: flex; align-items: center; width: 100%;
+  padding: 7px 10px; gap: 8px;
+  background: none; border: none; border-radius: 5px;
+  color: var(--text); cursor: pointer; font-size: 12px;
+  text-align: left; transition: background 0.1s, color 0.1s;
+}
+.context-menu-item:hover { background: var(--bg3); }
+.context-menu-item.danger { color: #e05555; }
+.context-menu-item.danger:hover { background: rgba(220,60,60,0.15); color: #ff6b6b; }
+
 /* ── Shell layout ─────────────────────────────────────────────────────── */
 .shell {
   min-height: 100vh;
@@ -277,7 +299,9 @@ body.vscode-light {
 .portrait-img {
   display: block;
   width: 100%; height: 100%;
-  object-fit: contain;
+  /* fill the whole frame regardless of source aspect ratio — no black bars */
+  object-fit: cover;
+  object-position: center top;
   /* keeps pixel art crisp; also helps with raster portraits */
   image-rendering: -webkit-optimize-contrast;
   image-rendering: crisp-edges;

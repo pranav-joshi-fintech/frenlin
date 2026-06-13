@@ -3,12 +3,10 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { ConversationStore } from './conversationStore';
 
-// ── Config loader ──────────────────────────────────────────────────────────
-function loadConfig(extensionPath: string): Record<string, string> {
-  const envPath = path.join(extensionPath, 'config', 'keys.env');
+function parseEnvFile(filePath: string): Record<string, string> {
   const cfg: Record<string, string> = {};
-  if (!fs.existsSync(envPath)) { return cfg; }
-  const lines = fs.readFileSync(envPath, 'utf8').split('\n');
+  if (!fs.existsSync(filePath)) { return cfg; }
+  const lines = fs.readFileSync(filePath, 'utf8').split('\n');
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith('#')) { continue; }
@@ -19,6 +17,19 @@ function loadConfig(extensionPath: string): Record<string, string> {
     if (key && val && !val.startsWith('your-') && !val.startsWith('sk-ant-your')) {
       cfg[key] = val;
     }
+  }
+  return cfg;
+}
+
+// ── Config loader ──────────────────────────────────────────────────────────
+function loadConfig(extensionPath: string): Record<string, string> {
+  const candidates = [
+    path.join(extensionPath, 'config', 'keys.env'),
+    path.join(extensionPath, 'backend', '.env'),
+  ];
+  const cfg: Record<string, string> = {};
+  for (const envPath of candidates) {
+    Object.assign(cfg, parseEnvFile(envPath));
   }
   return cfg;
 }
@@ -38,12 +49,14 @@ function loadCharacters(extensionPath: string, cfg: Record<string, string>): Cha
   if (!fs.existsSync(charsDir)) { return []; }
 
   const ACCENT_MAP: Record<string, string> = {
-    aurora: '#d4537e', kai: '#378add', sage: '#1d9e75'
+    vegeta: '#1565c0',
+    frieran: '#7c6a9a',
+    zoey: '#378add',
   };
   const VOICE_MAP: Record<string, string> = {
-    aurora: cfg['AURORA_VOICE_ID'] || '',
-    kai: cfg['KAI_VOICE_ID'] || '',
-    sage: cfg['SAGE_VOICE_ID'] || '',
+    vegeta: cfg['VEGETA_VOICE_ID'] || cfg['DEFAULT_ELEVENLABS_VOICE_ID'] || '',
+    frieran: cfg['FRIERAN_VOICE_ID'] || '',
+    zoey: cfg['ZOEY_VOICE_ID'] || '',
   };
 
   return fs.readdirSync(charsDir)
@@ -70,9 +83,24 @@ function loadCharacters(extensionPath: string, cfg: Record<string, string>): Cha
     });
 }
 
+function getActiveProfile(context: vscode.ExtensionContext, fallback: string): string {
+  return context.globalState.get<string>('vegetaasmr.activeProfile')
+    ?? context.globalState.get<string>('mommyasmr.activeProfile')
+    ?? fallback;
+}
+
+async function openMicrophoneSettings(): Promise<void> {
+  const { exec } = await import('child_process');
+  if (process.platform === 'darwin') {
+    exec('open "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Microphone"');
+  } else if (process.platform === 'win32') {
+    exec('start ms-settings:privacy-microphone');
+  }
+}
+
 // ── Webview Provider ───────────────────────────────────────────────────────
 export class CompanionViewProvider implements vscode.WebviewViewProvider {
-  public static readonly viewType = 'mommyasmr.companion';
+  public static readonly viewType = 'vegetaasmr.companion';
   private _view?: vscode.WebviewView;
   private _store: ConversationStore;
   private _cfg: Record<string, string>;
@@ -83,7 +111,9 @@ export class CompanionViewProvider implements vscode.WebviewViewProvider {
     this._store = new ConversationStore(context);
     this._cfg = loadConfig(context.extensionPath);
     this._characters = loadCharacters(context.extensionPath, this._cfg);
-    this._backendUrl = vscode.workspace.getConfiguration('mommyasmr').get<string>('backendUrl')
+    this._backendUrl = vscode.workspace.getConfiguration('vegetaasmr').get<string>('backendUrl')
+      || vscode.workspace.getConfiguration('mommyasmr').get<string>('backendUrl')
+      || this._cfg['VEGETAASMR_BACKEND_URL']
       || this._cfg['MOMMYASMR_BACKEND_URL']
       || this._cfg['FLASK_BACKEND_URL']
       || 'http://127.0.0.1:5001/respond';
@@ -113,8 +143,10 @@ export class CompanionViewProvider implements vscode.WebviewViewProvider {
       this.context.subscriptions
     );
 
-    // Post init state — send immediately and also on first visibility
-    const activeProfile = this.context.globalState.get<string>('mommyasmr.activeProfile', this._characters[0]?.id || 'aurora');
+    const defaultProfile = this._characters.find(c => c.id === 'vegeta')?.id
+      ?? this._characters[0]?.id
+      ?? 'vegeta';
+    const activeProfile = getActiveProfile(this.context, defaultProfile);
     const initPayload = {
       type: 'init',
       characters: this._characters,
@@ -126,7 +158,6 @@ export class CompanionViewProvider implements vscode.WebviewViewProvider {
       emotionUris: this._buildEmotionUris(webviewView.webview),
     };
     void webviewView.webview.postMessage(initPayload);
-    // Re-send on focus in case first message was dropped before JS loaded
     this.context.subscriptions.push(
       webviewView.onDidChangeVisibility(() => {
         if (webviewView.visible) { void webviewView.webview.postMessage(initPayload); }
@@ -212,43 +243,45 @@ export class CompanionViewProvider implements vscode.WebviewViewProvider {
             }),
           });
 
-          if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
-          }
-
           const contentType = response.headers.get('content-type') || '';
-          if (!contentType.includes('application/json')) {
-            throw new Error('Backend must return JSON.');
-          }
+          if (contentType.includes('application/json')) {
+            const data = await response.json() as {
+              text?: string;
+              emotion?: string;
+              audioBase64?: string;
+              audioMimeType?: string;
+              audioUrl?: string;
+              error?: string;
+            };
 
-          const data = await response.json() as {
-            text?: string;
-            emotion?: string;
-            audioBase64?: string;
-            audioMimeType?: string;
-            audioUrl?: string;
-          };
-
-          let audioBase64 = data.audioBase64 ?? '';
-          let audioMimeType = data.audioMimeType ?? 'audio/mpeg';
-
-          if (!audioBase64 && data.audioUrl) {
-            const audioResponse = await fetch(data.audioUrl);
-            if (audioResponse.ok) {
-              audioMimeType = audioResponse.headers.get('content-type') || audioMimeType;
-              const bytes = await audioResponse.arrayBuffer();
-              audioBase64 = Buffer.from(bytes).toString('base64');
+            if (!response.ok) {
+              throw new Error(data.error || `HTTP ${response.status}`);
             }
+
+            let audioBase64 = data.audioBase64 ?? '';
+            let audioMimeType = data.audioMimeType ?? 'audio/mpeg';
+
+            if (!audioBase64 && data.audioUrl) {
+              const audioResponse = await fetch(data.audioUrl);
+              if (audioResponse.ok) {
+                audioMimeType = audioResponse.headers.get('content-type') || audioMimeType;
+                const bytes = await audioResponse.arrayBuffer();
+                audioBase64 = Buffer.from(bytes).toString('base64');
+              }
+            }
+
+            webview.postMessage({
+              type: 'backendResponse',
+              requestId,
+              text: data.text ?? '',
+              emotion: data.emotion ?? 'supportive',
+              audioBase64,
+              audioMimeType,
+            });
+            break;
           }
 
-          webview.postMessage({
-            type: 'backendResponse',
-            requestId,
-            text: data.text ?? '',
-            emotion: data.emotion ?? 'supportive',
-            audioBase64,
-            audioMimeType,
-          });
+          throw new Error(`HTTP ${response.status}`);
         } catch (error) {
           webview.postMessage({
             type: 'backendError',
@@ -259,7 +292,7 @@ export class CompanionViewProvider implements vscode.WebviewViewProvider {
         break;
       }
       case 'setActiveProfile': {
-        await this.context.globalState.update('mommyasmr.activeProfile', msg.profile as string);
+        await this.context.globalState.update('vegetaasmr.activeProfile', msg.profile as string);
         break;
       }
       case 'getEditorContext': {
@@ -281,6 +314,18 @@ export class CompanionViewProvider implements vscode.WebviewViewProvider {
       }
       case 'showInfo': {
         vscode.window.showInformationMessage(msg.text as string);
+        break;
+      }
+      case 'openMicHelp': {
+        const open = 'Open Microphone Settings';
+        const choice = await vscode.window.showWarningMessage(
+          'Voice capture runs through the Python backend (not the VS Code webview). ' +
+          'Enable Microphone for Terminal or Cursor in System Settings, then restart the backend.',
+          open
+        );
+        if (choice === open) {
+          await openMicrophoneSettings();
+        }
         break;
       }
       case 'promptRename': {
@@ -315,7 +360,7 @@ export class CompanionViewProvider implements vscode.WebviewViewProvider {
              connect-src https: http://127.0.0.1:5001 http://127.0.0.1:5000 http://localhost:5001 http://localhost:5000;"/>
   <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
   <link rel="stylesheet" href="${styleUri}"/>
-  <title>MommyASMR</title>
+  <title>Vegeta ASMR</title>
 </head>
 <body>
 <div id="root"></div>
@@ -324,7 +369,6 @@ export class CompanionViewProvider implements vscode.WebviewViewProvider {
 </html>`;
   }
 
-  // Called from commands
   public trigger(type: string, payload?: Record<string, unknown>): void {
     this._view?.webview.postMessage({ type, ...payload });
   }
@@ -341,11 +385,12 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   const cmds: [string, () => void][] = [
-    ['mommyasmr.newConversation',    () => provider.trigger('triggerNew')],
-    ['mommyasmr.deleteConversation', () => provider.trigger('triggerDelete')],
-    ['mommyasmr.toggleHistory',      () => provider.trigger('triggerHistory')],
-    ['mommyasmr.switchProfile',      () => provider.trigger('triggerProfileMenu')],
-    ['mommyasmr.openPanel',          () => vscode.commands.executeCommand('workbench.view.extension.mommyasmr-sidebar')],
+    ['vegetaasmr.newConversation',    () => provider.trigger('triggerNew')],
+    ['vegetaasmr.deleteConversation', () => provider.trigger('triggerDelete')],
+    ['vegetaasmr.toggleHistory',      () => provider.trigger('triggerHistory')],
+    ['vegetaasmr.switchProfile',      () => provider.trigger('triggerProfileMenu')],
+    ['vegetaasmr.openPanel',          () => vscode.commands.executeCommand('workbench.view.extension.vegetaasmr-sidebar')],
+    ['vegetaasmr.openMicSettings',    () => openMicrophoneSettings()],
   ];
 
   for (const [cmd, fn] of cmds) {

@@ -49,6 +49,7 @@ function loadCharacters(extensionPath: string, cfg: Record<string, string>): Cha
   if (!fs.existsSync(charsDir)) { return []; }
 
   const ACCENT_MAP: Record<string, string> = {
+<<<<<<< HEAD
     vegeta: '#1565c0',
     frieran: '#7c6a9a',
     zoey: '#378add',
@@ -57,6 +58,20 @@ function loadCharacters(extensionPath: string, cfg: Record<string, string>): Cha
     vegeta: cfg['VEGETA_VOICE_ID'] || cfg['DEFAULT_ELEVENLABS_VOICE_ID'] || '',
     frieran: cfg['FRIERAN_VOICE_ID'] || '',
     zoey: cfg['ZOEY_VOICE_ID'] || '',
+=======
+    zoey: '#3b82f6',      // blue
+    frieran: '#a5c8ff',   // light blue (cooler)
+    vegeta: '#7dd3fc',    // light blue (cyan-leaning)
+    aurora: '#d4537e', kai: '#378add', sage: '#1d9e75',
+  };
+  const VOICE_MAP: Record<string, string> = {
+    zoey: cfg['ZOEY_VOICE_ID'] || cfg['AURORA_VOICE_ID'] || '',
+    frieran: cfg['FRIERAN_VOICE_ID'] || cfg['KAI_VOICE_ID'] || '',
+    vegeta: cfg['VEGETA_VOICE_ID'] || cfg['SAGE_VOICE_ID'] || '',
+    aurora: cfg['AURORA_VOICE_ID'] || '',
+    kai: cfg['KAI_VOICE_ID'] || '',
+    sage: cfg['SAGE_VOICE_ID'] || '',
+>>>>>>> b7a7f8668404b354cb86df10d6226af6061f11f2
   };
 
   return fs.readdirSync(charsDir)
@@ -99,6 +114,15 @@ async function openMicrophoneSettings(): Promise<void> {
 }
 
 // ── Webview Provider ───────────────────────────────────────────────────────
+function loadQuotes(extensionPath: string): string[] {
+  const quotesPath = path.join(extensionPath, 'quotes.txt');
+  if (!fs.existsSync(quotesPath)) { return []; }
+  return fs.readFileSync(quotesPath, 'utf8')
+    .split(/\r?\n/)
+    .map(l => l.trim())
+    .filter(l => l && !l.startsWith('#'));
+}
+
 export class CompanionViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'vegetaasmr.companion';
   private _view?: vscode.WebviewView;
@@ -106,14 +130,20 @@ export class CompanionViewProvider implements vscode.WebviewViewProvider {
   private _cfg: Record<string, string>;
   private _characters: CharacterMeta[];
   private _backendUrl: string;
+  private _quotes: string[];
 
   constructor(private readonly context: vscode.ExtensionContext) {
     this._store = new ConversationStore(context);
     this._cfg = loadConfig(context.extensionPath);
     this._characters = loadCharacters(context.extensionPath, this._cfg);
+<<<<<<< HEAD
     this._backendUrl = vscode.workspace.getConfiguration('vegetaasmr').get<string>('backendUrl')
       || vscode.workspace.getConfiguration('mommyasmr').get<string>('backendUrl')
       || this._cfg['VEGETAASMR_BACKEND_URL']
+=======
+    this._quotes = loadQuotes(context.extensionPath);
+    this._backendUrl = vscode.workspace.getConfiguration('mommyasmr').get<string>('backendUrl')
+>>>>>>> b7a7f8668404b354cb86df10d6226af6061f11f2
       || this._cfg['MOMMYASMR_BACKEND_URL']
       || this._cfg['FLASK_BACKEND_URL']
       || 'http://127.0.0.1:5001/respond';
@@ -156,6 +186,7 @@ export class CompanionViewProvider implements vscode.WebviewViewProvider {
       backendUrl: this._backendUrl,
       elevenLabsKey: this._cfg['ELEVENLABS_API_KEY'] || '',
       emotionUris: this._buildEmotionUris(webviewView.webview),
+      quotes: this._quotes,
     };
     void webviewView.webview.postMessage(initPayload);
     this.context.subscriptions.push(

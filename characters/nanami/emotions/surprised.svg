@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="300" height="300" viewBox="0 0 300 300">
+  <rect width="300" height="300" fill="#378add22" rx="8"/>
+  <rect x="2" y="2" width="296" height="296" fill="none" stroke="#378add" stroke-width="2" stroke-dasharray="8,4" rx="7"/>
+  <text x="150" y="130" font-size="80" text-anchor="middle" dominant-baseline="middle">😲</text>
+  <text x="150" y="190" font-size="16" text-anchor="middle" fill="#378add" font-family="monospace" font-weight="bold">Kai</text>
+  <text x="150" y="215" font-size="12" text-anchor="middle" fill="#378add99" font-family="monospace">[ surprised.png ]</text>
+  <text x="150" y="260" font-size="9" text-anchor="middle" fill="#378add66" font-family="monospace">replace with real art</text>
+</svg>

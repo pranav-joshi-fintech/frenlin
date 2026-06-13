@@ -1,0 +1,53 @@
+{
+  "name": "mommyasmr-ai",
+  "displayName": "MommyASMR.ai",
+  "description": "A voice-to-voice AI companion for your coding sessions.",
+  "version": "0.2.0",
+  "publisher": "mommyasmr",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Other"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "panel": [
+        {
+          "id": "mommyasmr-sidebar",
+          "title": "MommyASMR",
+          "icon": "media/icons/sidebar-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "mommyasmr-sidebar": [
+        {
+          "type": "webview",
+          "id": "mommyasmr.companion",
+          "name": "Companion"
+        }
+      ]
+    },
+    "commands": [
+      { "command": "mommyasmr.openPanel",          "title": "Open Companion Panel",       "category": "MommyASMR" },
+      { "command": "mommyasmr.newConversation",     "title": "New Conversation",           "category": "MommyASMR" },
+      { "command": "mommyasmr.deleteConversation",  "title": "Delete Conversation",        "category": "MommyASMR" },
+      { "command": "mommyasmr.toggleHistory",       "title": "Toggle Session History",     "category": "MommyASMR" },
+      { "command": "mommyasmr.switchProfile",       "title": "Switch Voice Profile",       "category": "MommyASMR" }
+    ],
+    "keybindings": [
+      { "command": "mommyasmr.openPanel", "key": "ctrl+shift+m", "mac": "cmd+shift+m" }
+    ]
+  },
+  "scripts": {
+    "compile":          "tsc -p ./tsconfig.json && tsc -p ./tsconfig.webview.json",
+    "watch":            "tsc -watch -p ./tsconfig.json",
+    "vscode:prepublish":"npm run compile"
+  },
+  "devDependencies": {
+    "@types/vscode":                     "^1.85.0",
+    "@types/node":                       "^18.0.0",
+    "@typescript-eslint/eslint-plugin":  "^6.0.0",
+    "@typescript-eslint/parser":         "^6.0.0",
+    "eslint":                            "^8.0.0",
+    "typescript":                        "^5.0.0"
+  }
+}

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="300" height="300" viewBox="0 0 300 300">
+  <rect width="300" height="300" fill="#1d9e7522" rx="8"/>
+  <rect x="2" y="2" width="296" height="296" fill="none" stroke="#1d9e75" stroke-width="2" stroke-dasharray="8,4" rx="7"/>
+  <text x="150" y="130" font-size="80" text-anchor="middle" dominant-baseline="middle">🤗</text>
+  <text x="150" y="190" font-size="16" text-anchor="middle" fill="#1d9e75" font-family="monospace" font-weight="bold">Sage</text>
+  <text x="150" y="215" font-size="12" text-anchor="middle" fill="#1d9e7599" font-family="monospace">[ supportive.png ]</text>
+  <text x="150" y="260" font-size="9" text-anchor="middle" fill="#1d9e7566" font-family="monospace">replace with real art</text>
+</svg>

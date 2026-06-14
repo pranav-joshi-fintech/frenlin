@@ -44,6 +44,10 @@ let quoteTimer: ReturnType<typeof setInterval>|null = null;
 let audioCtx: AudioContext|null           = null;
 let playbackCtx: AudioContext|null        = null;   // drives the wave during TTS playback
 let analyser: AnalyserNode|null           = null;
+let currentSource: AudioBufferSourceNode|null = null;  // playing TTS clip (Web Audio)
+let vizStream: MediaStream|null           = null;   // viz-only mic stream (if permitted)
+let vizAnalyser: AnalyserNode|null        = null;   // analyser for the user's voice
+let waveBoost                             = false;  // energetic "listening" wave fallback
 let mediaStream: MediaStream|null         = null;
 let mediaRecorder: MediaRecorder|null     = null;
 let audioChunks: Blob[]                   = [];
@@ -457,10 +461,11 @@ function startIdleWave(): void {
     ctx2!.clearRect(0, 0, w, h);
     const color = getCharColor();
     ctx2!.strokeStyle = color;
-    ctx2!.lineWidth = 1.8;
+    // "Listening" animation (no viz mic available) is bigger/faster than plain idle.
+    ctx2!.lineWidth = waveBoost ? 2.4 : 1.8;
     ctx2!.lineCap = 'round';
-    wavePhase += 0.025;
-    const baseAmp = Math.max(6, h * 0.12);
+    wavePhase += waveBoost ? 0.06 : 0.025;
+    const baseAmp = Math.max(6, h * (waveBoost ? 0.30 : 0.12));
     ctx2!.beginPath();
     for (let x = 0; x <= w; x++) {
       const amp = baseAmp + Math.sin(x * 0.018 + wavePhase * 0.7) * (baseAmp * 0.4);
@@ -513,15 +518,52 @@ function startLiveWave(): void {
 }
 
 // ── Mic / push-to-talk (MediaRecorder) ───────────────────────────────────
-function applyRecordingUI(rec: boolean): void {
-  const btn = document.getElementById('btn-mute');
-  const rip = document.getElementById('mute-ripple');
-  const ico1 = document.getElementById('ico-unmuted');
-  const ico2 = document.getElementById('ico-muted');
-  if (btn)  { btn.classList.toggle('recording', rec); btn.classList.toggle('muted', false); }
-  if (rip)  { rip.classList.toggle('hidden', !rec); }
-  if (ico1) { ico1.classList.toggle('hidden', false); }
-  if (ico2) { ico2.classList.toggle('hidden', true); }
+// The mic button is binary: MUTED (conversation off) or ACTIVE (conversation on).
+// While active it's either listening (red, ripple) or the AI is speaking (accent ring).
+function updateMicState(): void {
+  const btn  = document.getElementById('btn-mute');
+  const rip  = document.getElementById('mute-ripple');
+  const icoOn  = document.getElementById('ico-unmuted');
+  const icoOff = document.getElementById('ico-muted');
+  const active    = conversationActive;
+  const listening = conversationActive && isListening;
+  if (btn) {
+    btn.classList.toggle('muted', !active);
+    btn.classList.toggle('conversing', active);
+    btn.classList.toggle('recording', listening);
+  }
+  if (rip)    { rip.classList.toggle('hidden', !listening); }
+  if (icoOn)  { icoOn.classList.toggle('hidden', !active); }
+  if (icoOff) { icoOff.classList.toggle('hidden', active); }
+}
+
+// Back-compat shim: older call sites used applyRecordingUI(bool).
+function applyRecordingUI(_rec: boolean): void { updateMicState(); }
+
+// ── Viz-only mic: react the waveform to the USER's voice during listening ──
+// The backend (ffmpeg) does the real recording; this stream is purely for the wave.
+// If the webview mic is blocked, we fall back to an animated "listening" wave.
+async function startVizMic(): Promise<void> {
+  if (vizAnalyser) { return; }
+  try {
+    const ctx = ensureAudioContext();
+    if (!ctx || !navigator.mediaDevices?.getUserMedia) { return; }
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    vizStream = stream;
+    const src = ctx.createMediaStreamSource(stream);
+    const an = ctx.createAnalyser();
+    an.fftSize = 1024;
+    src.connect(an);   // NOT connected to destination — no echo
+    vizAnalyser = an;
+  } catch {
+    vizAnalyser = null;   // blocked → animated listening wave is used instead
+  }
+}
+
+function stopVizMic(): void {
+  try { vizStream?.getTracks().forEach(t => t.stop()); } catch { /* */ }
+  vizStream = null;
+  vizAnalyser = null;
 }
 
 // Backend (ffmpeg) capture — the reliable path when the webview mic is blocked.
@@ -531,9 +573,19 @@ function backendListen(): void {
   isListening = true;
   const requestId = makeRequestId();
   activeRequestId = requestId;
-  applyRecordingUI(true);
+  updateMicState();
   setEmotion('ready');
   setDialogue('Listening…', true, 'system');
+  // Drive the wave from the user's voice if we have a viz mic; else animate it.
+  if (vizAnalyser) {
+    analyser = vizAnalyser;
+    waveBoost = false;
+    startLiveWave();
+  } else {
+    analyser = null;
+    waveBoost = true;        // energetic "listening" animation
+    startIdleWave();
+  }
   vscode.postMessage({ type: 'startBackendListen', requestId });
 }
 
@@ -559,20 +611,23 @@ function startConversation(): void {
   ensureAudioContext();   // resume audio under this tap so later replies aren't muted
   conversationActive = true;
   cancelTurn = false;
-  setMicConversing(true);
+  void startVizMic();     // best-effort: react the wave to the user's voice
+  updateMicState();
   listenTurn();
 }
 
 function stopConversation(userInitiated = false): void {
   conversationActive = false;
-  setMicConversing(false);
   if (isListening) {                       // cancel an in-progress capture and drop its result
     cancelTurn = true;
     vscode.postMessage({ type: 'stopBackendListen' });
   }
   if (currentAudio) { try { currentAudio.pause(); } catch { /* */ } currentAudio = null; }
+  if (currentSource) { try { currentSource.stop(); } catch { /* */ } currentSource = null; }
+  stopVizMic();
   analyser = null;   // keep sharedAudioCtx alive for the next conversation
-  applyRecordingUI(false);
+  waveBoost = false;
+  updateMicState();
   startIdleWave();
   if (userInitiated) {
     setDialogue('Conversation ended. Tap the mic to talk again.', true, 'system');
@@ -589,7 +644,7 @@ function continueConversation(): void {
   if (!conversationActive) { return; }
   window.setTimeout(() => {
     if (conversationActive && !isListening && !isProcessing) { listenTurn(); }
-  }, 350);
+  }, 200);
 }
 
 async function startRecording(): Promise<void> {
@@ -744,45 +799,68 @@ function playAudioBase64(audioBase64: string, mimeType: string): void {
   for (let i = 0; i < binary.length; i++) {
     bytes[i] = binary.charCodeAt(i);
   }
-  const blob = new Blob([bytes], { type: mimeType || 'audio/mpeg' });
+  // Preferred path: decode + play through Web Audio so the waveform reacts to the real
+  // voice. Because we resume the context under a user gesture and play a BufferSource
+  // (no element-level autoplay gate), this is also reliably audible.
+  const ctx = ensureAudioContext();
+  if (ctx) {
+    void (async (): Promise<void> => {
+      try {
+        if (ctx.state === 'suspended') { await ctx.resume(); }
+        const audioBuf = await ctx.decodeAudioData(bytes.buffer.slice(0));
+        const src = ctx.createBufferSource();
+        src.buffer = audioBuf;
+        const an = ctx.createAnalyser();
+        an.fftSize = 1024;
+        src.connect(an);
+        an.connect(ctx.destination);
+        currentSource = src;
+        analyser = an;            // startLiveWave reads this → real voice-reactive wave
+        startLiveWave();
+        let done = false;
+        const finish = (): void => {
+          if (done) { return; }
+          done = true;
+          if (currentSource === src) { currentSource = null; }
+          analyser = null;
+          startIdleWave();
+          continueConversation();   // AI done speaking → listen again
+        };
+        src.onended = finish;
+        src.start();
+      } catch (err) {
+        console.warn('[mommyasmr] web-audio playback failed, using element fallback:', err);
+        playAudioElementFallback(bytes, mimeType);
+      }
+    })();
+    return;
+  }
+  playAudioElementFallback(bytes, mimeType);
+}
+
+// Fallback playback via <audio> element (no waveform reaction) if Web Audio decode fails.
+function playAudioElementFallback(bytes: Uint8Array, mimeType: string): void {
+  const blob = new Blob([bytes as BlobPart], { type: mimeType || 'audio/mpeg' });
   const url = URL.createObjectURL(blob);
   const audio = new Audio(url);
   currentAudio = audio;
-
   let done = false;
-  const cleanup = (): void => {
+  let watchdog: number | null = window.setTimeout(() => finish(), 15000);
+  const finish = (): void => {
     if (done) { return; }
     done = true;
+    if (watchdog) { clearTimeout(watchdog); watchdog = null; }
     URL.revokeObjectURL(url);
     if (currentAudio === audio) { currentAudio = null; }
-    if (!isRecording) {
-      analyser = null;
-      startIdleWave();
-    }
-    // AI finished speaking — take the next turn if we're in a conversation.
     continueConversation();
   };
-
-  audio.onended = cleanup;
-  audio.onerror = cleanup;
-
-  // Visualize via the shared (already-running) context so playback is never silenced.
-  if (!isRecording) {
-    const ctx = ensureAudioContext();
-    if (ctx) {
-      try {
-        const srcNode = ctx.createMediaElementSource(audio);
-        const an = ctx.createAnalyser();
-        an.fftSize = 1024;
-        srcNode.connect(an);
-        an.connect(ctx.destination);   // keep audio audible
-        analyser = an;                 // startLiveWave reads this global
-        startLiveWave();
-      } catch { /* visualization is optional; audio still plays below */ }
-    }
-  }
-
-  audio.play().catch(() => { cleanup(); /* shouldn't happen post-gesture, but stay safe */ });
+  audio.onended = finish;
+  audio.onloadedmetadata = (): void => {
+    const ms = (Number.isFinite(audio.duration) ? audio.duration * 1000 : 12000) + 1500;
+    if (watchdog) { clearTimeout(watchdog); }
+    watchdog = window.setTimeout(() => finish(), ms);
+  };
+  audio.play().catch((err) => { console.warn('[mommyasmr] audio playback blocked:', err); });
 }
 
 // ── AI call ───────────────────────────────────────────────────────────────
@@ -967,7 +1045,8 @@ window.addEventListener('message', (ev) => {
     case 'sttResult': {
       if (activeRequestId && (msg.requestId as string) !== activeRequestId) { break; }
       isListening = false;
-      applyRecordingUI(false);
+      analyser = null; waveBoost = false; startIdleWave();   // stop the listening wave
+      updateMicState();
       activeRequestId = '';
       if (cancelTurn) { cancelTurn = false; break; }   // conversation was stopped mid-listen
       const transcript = String(msg.transcript ?? '').trim();
@@ -986,7 +1065,8 @@ window.addEventListener('message', (ev) => {
       if (activeRequestId && (msg.requestId as string) !== activeRequestId) { break; }
       isListening = false;
       cancelTurn = false;
-      applyRecordingUI(false);
+      analyser = null; waveBoost = false;
+      updateMicState();
       activeRequestId = '';
       reportError(String(msg.message ?? 'Microphone capture failed.'));
       stopConversation();   // bail out of the loop on a real capture failure

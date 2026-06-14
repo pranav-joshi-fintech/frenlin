@@ -3,7 +3,6 @@ import base64
 import json
 import math
 import os
-from collections import deque
 import platform
 import re
 import subprocess
@@ -40,6 +39,12 @@ DEFAULT_VOICE_ID = os.getenv("DEFAULT_ELEVENLABS_VOICE_ID", "").strip()
 PORT = int(os.getenv("PORT", "5001"))
 LISTEN_SECONDS = float(os.getenv("LISTEN_SECONDS", "7"))
 
+# OpenAI (primary provider): chat completions for replies, Whisper for transcription.
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip()
+OPENAI_TRANSCRIBE_MODEL = os.getenv("OPENAI_TRANSCRIBE_MODEL", "whisper-1").strip()
+OPENAI_BASE = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+
 _gemini_client = None
 
 
@@ -73,6 +78,85 @@ def gemini_models_to_try() -> List[str]:
             seen.add(model)
             ordered.append(model)
     return ordered
+
+
+REPLY_EMOTIONS = ["happy", "sad", "angry", "surprised", "supportive", "thinking", "concerned"]
+
+
+def _openai_headers() -> Dict[str, str]:
+    if not OPENAI_API_KEY:
+        raise RuntimeError(
+            "OpenAI API key is not configured. Add OPENAI_API_KEY to backend/.env "
+            "(create one at https://platform.openai.com/api-keys and add a little credit)."
+        )
+    return {"Authorization": f"Bearer {OPENAI_API_KEY}"}
+
+
+def format_openai_error(resp: "requests.Response") -> str:
+    try:
+        detail = resp.json().get("error", {}).get("message", "") or resp.text[:300]
+    except Exception:
+        detail = (resp.text or "")[:300]
+    if resp.status_code == 401:
+        return "OpenAI rejected the API key. Check OPENAI_API_KEY in backend/.env."
+    if resp.status_code == 429 or "insufficient_quota" in detail:
+        return (
+            "OpenAI quota/rate limit hit. Add credit at "
+            "https://platform.openai.com/settings/organization/billing, then retry."
+        )
+    return f"OpenAI error {resp.status_code}: {detail}"
+
+
+def generate_with_openai(*, system_prompt: str, user_prompt: str, json_mode: bool = True) -> str:
+    headers = {**_openai_headers(), "Content-Type": "application/json"}
+    body: Dict[str, Any] = {
+        "model": OPENAI_MODEL,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": 0.7,
+        "max_tokens": 400,
+    }
+    if json_mode:
+        # Structured output: the model is constrained to this exact schema (no prose preamble).
+        body["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "companion_reply",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "text": {"type": "string"},
+                        "emotion": {"type": "string", "enum": REPLY_EMOTIONS},
+                    },
+                    "required": ["text", "emotion"],
+                },
+            },
+        }
+    resp = requests.post(f"{OPENAI_BASE}/chat/completions", headers=headers, json=body, timeout=60)
+    if resp.status_code != 200:
+        raise RuntimeError(format_openai_error(resp))
+    data = resp.json()
+    return (data["choices"][0]["message"].get("content") or "").strip()
+
+
+def transcribe_with_openai(file_name: str, file_bytes: bytes, mime_type: str) -> str:
+    headers = _openai_headers()  # multipart; let requests set Content-Type
+    files = {"file": (file_name, file_bytes, mime_type or "application/octet-stream")}
+    data = {"model": OPENAI_TRANSCRIBE_MODEL, "language": "en"}
+    resp = requests.post(
+        f"{OPENAI_BASE}/audio/transcriptions",
+        headers=headers,
+        files=files,
+        data=data,
+        timeout=120,
+    )
+    if resp.status_code != 200:
+        raise RuntimeError(format_openai_error(resp))
+    return (resp.json().get("text") or "").strip()
 
 
 def format_gemini_error(exc: Exception) -> str:
@@ -336,7 +420,7 @@ def call_gemini(
         ]
     )
 
-    text = generate_with_gemini(system_prompt=system_prompt, user_prompt=user_prompt, json_mode=True)
+    text = generate_with_openai(system_prompt=system_prompt, user_prompt=user_prompt, json_mode=True)
 
     try:
         parsed = safe_json_loads(text)
@@ -456,23 +540,30 @@ def _stream_command(ffmpeg: str) -> List[str]:
                 "No microphone was found via ffmpeg/DirectShow. Set it as the Windows default "
                 "input device or set MIC_DEVICE_NAME in backend/.env."
             )
-        # small audio_buffer_size keeps capture latency low so end-of-speech is detected promptly
-        return head + ["-f", "dshow", "-audio_buffer_size", "80", "-i", f"audio={device}"] + tail
+        # thread_queue_size guards against dropped input frames (lost words); audio_buffer_size
+        # keeps capture latency low so end-of-speech is detected promptly.
+        return head + [
+            "-thread_queue_size", "1024",
+            "-f", "dshow", "-audio_buffer_size", "80",
+            "-i", f"audio={device}",
+        ] + tail
     if system == "Darwin":
         return head + ["-f", "avfoundation", "-i", ":0"] + tail
     return head + ["-f", "alsa", "-i", "default"] + tail
 
 
 def _rms_s16(buf: bytes) -> float:
-    count = len(buf) // 2
-    if count == 0:
+    if len(buf) < 2:
         return 0.0
-    samples = array.array("h")
-    samples.frombytes(buf[: count * 2])
-    total = 0
-    for value in samples:
-        total += value * value
-    return math.sqrt(total / count)
+    try:
+        import audioop  # C-speed RMS so the read loop never lags behind capture (avoids drops)
+        return float(audioop.rms(buf, 2))
+    except Exception:
+        count = len(buf) // 2
+        samples = array.array("h")
+        samples.frombytes(buf[: count * 2])
+        total = sum(v * v for v in samples)
+        return math.sqrt(total / count) if count else 0.0
 
 
 def _write_wav(pcm: bytes, rate: int) -> str:
@@ -504,10 +595,10 @@ def record_until_silence(stop_event: Optional[threading.Event] = None) -> str:
         ) from exc
 
     pcm = bytearray()
-    # Adaptive noise floor: a sliding window of recent levels; the 20th percentile
-    # approximates the background even while speech is present (speech is bursty, so
-    # gaps pull the low percentile down). Robust to loud rooms AND immediate talking.
-    window: deque = deque(maxlen=max(10, int(1.5 / frame_sec)))
+    # Noise-floor tracker: fast-attack DOWN to any quieter frame (so it sits at true
+    # silence, found in the gaps between words), slow-release UP for genuinely louder
+    # rooms. Threshold rides just above the floor, so normal speech clears it easily.
+    noise_floor = 200.0
     speech_started = False
     speech_frames = 0
     silence_run = 0.0
@@ -525,14 +616,15 @@ def record_until_silence(stop_event: Optional[threading.Event] = None) -> str:
             elapsed += frame_sec
             level = _rms_s16(chunk)
 
-            window.append(level)
-            ordered = sorted(window)
-            noise_floor = ordered[len(ordered) // 5]  # ~20th percentile
-            threshold = max(500.0, noise_floor * 2.5 + 200.0)
+            if level < noise_floor:
+                noise_floor = level                                  # fast attack down
+            else:
+                noise_floor = noise_floor * 0.997 + level * 0.003    # slow release up
+            threshold = max(350.0, noise_floor * 2.0 + 250.0)
 
             if level > threshold:
                 speech_frames += 1
-                if speech_frames >= 2:        # require 2 frames to avoid clicks/pops
+                if speech_frames >= 2:        # 2 frames to ignore clicks/pops
                     speech_started = True
                 silence_run = 0.0
             else:
@@ -558,78 +650,23 @@ def record_until_silence(stop_event: Optional[threading.Event] = None) -> str:
 
 
 def transcribe_audio(wav_path: str) -> str:
-    from google.genai import types
-
     with open(wav_path, "rb") as handle:
         audio_bytes = handle.read()
-
-    client = get_gemini_client()
-    prompt = (
-        "Transcribe the spoken English in this clip. "
-        "Return only the transcript text with no quotes or commentary."
-    )
-
-    last_error: Optional[Exception] = None
-    for model in gemini_models_to_try():
-        try:
-            response = client.models.generate_content(
-                model=model,
-                contents=[
-                    types.Content(
-                        role="user",
-                        parts=[
-                            types.Part.from_bytes(data=audio_bytes, mime_type="audio/wav"),
-                            types.Part.from_text(text=prompt),
-                        ],
-                    )
-                ],
-                config=types.GenerateContentConfig(safety_settings=gemini_safety_settings()),
-            )
-            transcript = _safe_response_text(response)
-            if transcript:
-                return transcript
-            raise RuntimeError("Gemini returned an empty transcript.")
-        except Exception as exc:
-            last_error = exc
-            continue
-
-    raise RuntimeError(format_gemini_error(last_error or RuntimeError("Transcription failed.")))
+    return transcribe_with_openai("audio.wav", audio_bytes, "audio/wav")
 
 
 def transcribe_audio_bytes(audio_bytes: bytes, mime_type: str) -> str:
-    from google.genai import types
-
-    safe_mime = mime_type if mime_type else "audio/webm"
-    client = get_gemini_client()
-    prompt = (
-        "Transcribe the spoken English in this audio clip. "
-        "Return only the transcript text with no quotes, labels, or commentary."
-    )
-    last_error: Optional[Exception] = None
-    for model in gemini_models_to_try():
-        try:
-            response = client.models.generate_content(
-                model=model,
-                contents=[
-                    types.Content(
-                        role="user",
-                        parts=[
-                            types.Part.from_bytes(data=audio_bytes, mime_type=safe_mime),
-                            types.Part.from_text(text=prompt),
-                        ],
-                    )
-                ],
-                config=types.GenerateContentConfig(safety_settings=gemini_safety_settings()),
-            )
-            transcript = _safe_response_text(response)
-            if transcript:
-                return transcript
-            raise RuntimeError("Gemini returned an empty transcript.")
-        except Exception as exc:
-            last_error = exc
-            continue
-
-    raise RuntimeError(format_gemini_error(last_error or RuntimeError("Transcription failed.")))
+    safe_mime = mime_type or "audio/webm"
+    ext = "webm"
+    if "wav" in safe_mime:
+        ext = "wav"
+    elif "mp3" in safe_mime or "mpeg" in safe_mime:
+        ext = "mp3"
+    elif "ogg" in safe_mime:
+        ext = "ogg"
+    elif "mp4" in safe_mime or "m4a" in safe_mime:
+        ext = "m4a"
+    return transcribe_with_openai(f"audio.{ext}", audio_bytes, safe_mime)
 
 
 def synthesize_speech(text: str, voice_id: str) -> Dict[str, str]:
@@ -670,19 +707,11 @@ def synthesize_speech(text: str, voice_id: str) -> Dict[str, str]:
 
 @app.get("/health")
 def health() -> Any:
-    key_type = "missing"
-    if GEMINI_API_KEY.startswith("AQ."):
-        key_type = "auth"
-    elif GEMINI_API_KEY.startswith("AIza"):
-        key_type = "standard"
-    elif GEMINI_API_KEY:
-        key_type = "unknown"
-
     return jsonify({
         "ok": True,
-        "geminiConfigured": bool(GEMINI_API_KEY),
-        "geminiKeyType": key_type,
-        "geminiModel": GEMINI_MODEL,
+        "openaiConfigured": bool(OPENAI_API_KEY),
+        "openaiModel": OPENAI_MODEL,
+        "transcribeModel": OPENAI_TRANSCRIBE_MODEL,
         "elevenLabsConfigured": bool(ELEVENLABS_API_KEY),
     })
 
@@ -758,7 +787,7 @@ def respond() -> Any:
             response_payload["audioError"] = str(tts_exc)
         return jsonify(response_payload)
     except Exception as exc:
-        return jsonify({"error": format_gemini_error(exc)}), 500
+        return jsonify({"error": str(exc)}), 500
 
 
 if __name__ == "__main__":

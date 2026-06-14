@@ -13,6 +13,17 @@ interface CharacterMeta {
 interface Message      { id: string; role: 'user'|'assistant'; content: string; emotion?: string; timestamp: number; }
 interface Conversation { id: string; title: string; createdAt: number; updatedAt: number; messages: Message[]; }
 
+// ── Productivity-partner types ──────────────────────────────────────────────
+type TodoStatus = 'todo' | 'in-progress' | 'done';
+interface Todo { id: string; text: string; status: TodoStatus; createdAt: number; updatedAt: number; }
+interface TabInfo { name: string; ext: string; language: string; }
+interface WorkspaceSnapshot {
+  activeFile: string|null; ext: string|null; language: string|null;
+  untitled: boolean; dirty: boolean; isEnv: boolean; openTabs: TabInfo[];
+}
+interface ResourceData { title: string; description: string; url: string; label?: string; }
+type WidgetState = { kind: 'todo' } | { kind: 'celebration' } | { kind: 'resource'; data: ResourceData };
+
 const vscode = acquireVsCodeApi();
 
 // ── State ─────────────────────────────────────────────────────────────────
@@ -33,6 +44,14 @@ let isProcessing                          = false;
 let conversationActive                    = false;   // hands-free conversation loop running
 let cancelTurn                            = false;   // discard the in-flight listen result
 let currentAudio: HTMLAudioElement|null   = null;    // the TTS clip currently playing
+
+// productivity partner
+let todos: Todo[]                         = [];
+let workspace: WorkspaceSnapshot|null     = null;
+let widgetStack: WidgetState[]            = [{ kind: 'todo' }];
+let celebrating                           = false;
+let pendingCelebrations                   = 0;
+let interventionReqId                     = '';      // requestId of an in-flight intervention
 let typewriterTimer: ReturnType<typeof setInterval>|null = null;
 let activeRequestId                        = '';
 let ccEnabled                              = true;   // captions on by default
@@ -189,6 +208,9 @@ function renderApp(): void {
         <textarea id="composer-input" class="composer-input" rows="2" placeholder="Type a message if the mic is being stubborn..."></textarea>
         <button id="composer-send" class="composer-send" title="Send message">Send</button>
       </div>
+
+      <!-- ── 5b. Widget area (todo tracker by default; celebration/resource override) ── -->
+      <div id="widget-area" class="widget-area"></div>
 
       <!-- ── 6. Inline quote (not boxed — part of the main flow) ─────── -->
       <div class="quote-inline">
@@ -913,6 +935,172 @@ function fmtDate(ts: number): string {
   return new Date(ts).toLocaleDateString('en', { month: 'short', day: 'numeric' });
 }
 
+function relTime(ts: number): string {
+  const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+  if (s < 45) { return 'just now'; }
+  const m = Math.floor(s / 60); if (m < 60) { return `${m}m ago`; }
+  const h = Math.floor(m / 60); if (h < 24) { return `${h}h ago`; }
+  const d = Math.floor(h / 24); if (d < 7) { return `${d}d ago`; }
+  return `${Math.floor(d / 7)}w ago`;
+}
+
+// ── Widget manager (stack: Todo tracker is the default, others push on top) ─
+function currentWidget(): WidgetState { return widgetStack[widgetStack.length - 1]; }
+function pushWidget(w: WidgetState): void { widgetStack.push(w); renderWidget(); }
+function popWidget(): void { if (widgetStack.length > 1) { widgetStack.pop(); } renderWidget(); }
+
+function renderWidget(): void {
+  const area = document.getElementById('widget-area');
+  if (!area) { return; }
+  const w = currentWidget();
+  if (w.kind === 'celebration') { renderCelebrationWidget(area); }
+  else if (w.kind === 'resource') { renderResourceWidget(area, w.data); }
+  else { renderTodoWidget(area); }
+}
+
+const TODO_STATUS: Record<TodoStatus, { label: string; next: TodoStatus }> = {
+  'todo':        { label: 'To do',       next: 'in-progress' },
+  'in-progress': { label: 'In progress', next: 'done' },
+  'done':        { label: 'Done',        next: 'todo' },
+};
+
+function renderTodoWidget(area: HTMLElement): void {
+  const ctxLine = workspace?.activeFile
+    ? `<div class="widget-context mono dim">${esc(workspace.activeFile)} · ${esc(workspace.language ?? '')}${workspace.openTabs.length > 1 ? ` · ${workspace.openTabs.length} tabs` : ''}</div>`
+    : '';
+  const active = todos.filter(t => t.status !== 'done').length;
+  area.innerHTML = `
+    <div class="widget todo-widget">
+      <div class="widget-head">
+        <span class="widget-title mono">// todos</span>
+        <span class="widget-count mono dim">${active} active</span>
+      </div>
+      ${ctxLine}
+      <ul class="todo-list" id="todo-list"></ul>
+    </div>`;
+  const list = document.getElementById('todo-list');
+  if (!list) { return; }
+  if (!todos.length) {
+    list.innerHTML = `<li class="todo-empty dim">No tasks yet — try saying “add fix the auth bug to my list”.</li>`;
+    return;
+  }
+  for (const t of todos) {
+    const li = make('li', `todo-item status-${t.status}`);
+    li.innerHTML = `
+      <button class="todo-status" title="Change status">${TODO_STATUS[t.status].label}</button>
+      <span class="todo-text">${esc(t.text)}</span>
+      <span class="todo-age mono dim">${relTime(t.createdAt)}</span>
+      <button class="todo-del" title="Delete">✕</button>`;
+    li.querySelector('.todo-status')?.addEventListener('click', () => {
+      vscode.postMessage({ type: 'todoAction', action: { action: 'move', id: t.id, status: TODO_STATUS[t.status].next } });
+    });
+    li.querySelector('.todo-del')?.addEventListener('click', () => {
+      vscode.postMessage({ type: 'todoAction', action: { action: 'delete', id: t.id } });
+    });
+    list.appendChild(li);
+  }
+}
+
+// Celebration: confetti that plays exactly 3 loops, then auto-restores the todo widget.
+function triggerCelebration(): void {
+  if (celebrating) { pendingCelebrations++; return; }   // never overlap; queue instead
+  celebrating = true;
+  pushWidget({ kind: 'celebration' });
+}
+
+function endCelebration(): void {
+  if (!celebrating) { return; }
+  celebrating = false;
+  if (currentWidget().kind === 'celebration') { popWidget(); }
+  if (pendingCelebrations > 0) { pendingCelebrations--; triggerCelebration(); }
+}
+
+function renderCelebrationWidget(area: HTMLElement): void {
+  area.innerHTML = `
+    <div class="widget celebration-widget">
+      <div class="confetti">${Array.from({ length: 16 }, (_, i) => `<span style="--i:${i}"></span>`).join('')}</div>
+      <div class="celebration-emoji">🎉</div>
+      <div class="celebration-text">Nice work!</div>
+    </div>`;
+  const emoji = area.querySelector('.celebration-emoji') as HTMLElement | null;
+  let loops = 0;
+  emoji?.addEventListener('animationiteration', () => {
+    if (++loops >= 3) { endCelebration(); }
+  });
+  // Safety net in case animationiteration is missed (3 × 1.2s + buffer).
+  window.setTimeout(() => endCelebration(), 4200);
+}
+
+function renderResourceWidget(area: HTMLElement, data: ResourceData): void {
+  area.innerHTML = `
+    <div class="widget resource-widget">
+      <button class="resource-dismiss" id="resource-dismiss" title="Dismiss">✕</button>
+      <div class="resource-title">${esc(data.title || 'Resource')}</div>
+      <div class="resource-desc dim">${esc(data.description || '')}</div>
+      ${data.url ? `<button class="resource-link" id="resource-link">${esc(data.label || 'Open')}</button>` : ''}
+    </div>`;
+  document.getElementById('resource-dismiss')?.addEventListener('click', () => {
+    if (currentWidget().kind === 'resource') { popWidget(); }
+  });
+  if (data.url) {
+    document.getElementById('resource-link')?.addEventListener('click', () => {
+      vscode.postMessage({ type: 'openExternal', url: data.url });
+    });
+  }
+}
+
+function showWidgetFromAI(widget: Record<string, unknown> | null | undefined): void {
+  if (!widget || typeof widget !== 'object') { return; }
+  const type = String((widget as { type?: unknown }).type ?? '');
+  if (type === 'celebration') {
+    triggerCelebration();
+  } else if (type === 'resource') {
+    pushWidget({ kind: 'resource', data: {
+      title: String(widget.title ?? 'Resource'),
+      description: String(widget.description ?? ''),
+      url: String(widget.url ?? ''),
+      label: widget.label ? String(widget.label) : 'Open',
+    } });
+  }
+}
+
+// ── Proactive interventions (focus / .env) — spoken, in-character ───────────
+function deliverIntervention(kind: string): void {
+  if (isProcessing) { return; }   // never talk over an active turn
+  let directive = '';
+  if (kind === 'tabSwitch') {
+    directive = '(Productivity intervention: I keep rapidly switching between editor tabs without making any edits. In character, give me a short, firm nudge to focus on one task. One or two spoken sentences.)';
+  } else if (kind === 'envIdle') {
+    directive = '(Productivity intervention: I have been staring at a .env secrets file for thirty seconds without editing it or leaving. In character, react with concern or mild annoyance and tell me to either rotate or edit the key, or close the file. One or two spoken sentences.)';
+  } else {
+    return;
+  }
+  // Pause any active listening; the conversation loop resumes after the AI speaks.
+  if (isListening) {
+    cancelTurn = true; isListening = false;
+    vscode.postMessage({ type: 'stopBackendListen' });
+    analyser = null; waveBoost = false; updateMicState();
+  }
+  isProcessing = true;
+  setEmotion('thinking');
+  const requestId = makeRequestId();
+  activeRequestId = requestId;
+  interventionReqId = requestId;
+  vscode.postMessage({
+    type: 'sendTranscript',
+    requestId,
+    transcript: directive,
+    profileId: activeProfileId,
+    conversationId: currentConvoId,
+    editorContext: {},
+    history: [],
+    characterPrompt: activeChar()?.prompt ?? '',
+    voiceId: activeChar()?.voiceId ?? '',
+    characterName: activeChar()?.name ?? '',
+    directive: true,
+  });
+}
+
 // ── Event wiring ──────────────────────────────────────────────────────────
 function bindEvents(): void {
   el('btn-hist').addEventListener('click',  () => toggleHistory());
@@ -958,9 +1146,12 @@ window.addEventListener('message', (ev) => {
       conversations = (msg.conversations as Conversation[]) ?? [];
       currentConvoId = (msg.currentId    as string) ?? null;
       quotesList    = (msg.quotes        as string[]) ?? [];
+      todos         = (msg.todos         as Todo[]) ?? [];
+      workspace     = (msg.workspaceContext as WorkspaceSnapshot) ?? null;
       activeProfileId = (msg.activeProfile as string) ?? (characters[0]?.id ?? 'frieran');
 
       applyProfile(activeProfileId);
+      renderWidget();
       renderHistory();
       setCC(true);
       if (quotesList.length) {
@@ -994,21 +1185,30 @@ window.addEventListener('message', (ev) => {
 
     case 'backendResponse': {
       if (activeRequestId && (msg.requestId as string) !== activeRequestId) { break; }
+      const isIntervention = (msg.requestId as string) === interventionReqId && interventionReqId !== '';
+      if (isIntervention) { interventionReqId = ''; }
       const clean = String(msg.text ?? '').trim();
       const emotion = String(msg.emotion ?? 'supportive');
 
       setEmotion(emotion);
       setDialogue(clean, !clean, 'char');
-      if (clean) {
-        adviceList.push(clean);
-        adviceIdx = adviceList.length - 1;
-        updateAdviceNav();
+
+      // Interventions are proactive nudges — show + speak them, but don't persist as
+      // conversation history.
+      if (!isIntervention) {
+        if (clean) {
+          adviceList.push(clean);
+          adviceIdx = adviceList.length - 1;
+          updateAdviceNav();
+        }
+        currentMessages.push({ id: '', role: 'assistant', content: clean, emotion, timestamp: Date.now() });
+        if (currentConvoId) {
+          vscode.postMessage({ type: 'saveMessage', conversationId: currentConvoId, role: 'assistant', content: clean, emotion });
+        }
       }
 
-      currentMessages.push({ id: '', role: 'assistant', content: clean, emotion, timestamp: Date.now() });
-      if (currentConvoId) {
-        vscode.postMessage({ type: 'saveMessage', conversationId: currentConvoId, role: 'assistant', content: clean, emotion });
-      }
+      // The AI may also drive a widget (celebration / resource).
+      showWidgetFromAI(msg.widget as Record<string, unknown> | null);
 
       const composerInput = document.getElementById('composer-input') as HTMLTextAreaElement | null;
       if (composerInput) { composerInput.disabled = false; }
@@ -1131,6 +1331,21 @@ window.addEventListener('message', (ev) => {
       break;
     }
 
+    case 'todos': {
+      todos = (msg.todos as Todo[]) ?? [];
+      if (currentWidget().kind === 'todo') { renderWidget(); }
+      break;
+    }
+    case 'workspaceContext': {
+      workspace = (msg.context as WorkspaceSnapshot) ?? null;
+      if (currentWidget().kind === 'todo') { renderWidget(); }
+      break;
+    }
+    case 'intervention': {
+      deliverIntervention(String(msg.kind ?? ''));
+      break;
+    }
+
     case 'triggerNew':     vscode.postMessage({ type: 'newConversation' }); break;
     case 'triggerDelete':
       if (currentConvoId) { vscode.postMessage({ type: 'deleteConversation', id: currentConvoId }); }
@@ -1145,3 +1360,7 @@ renderApp();
 bindEvents();
 startIdleWave();
 applyRecordingUI(false);
+renderWidget();
+vscode.postMessage({ type: 'requestTodos' });
+// Keep relative timestamps ("2h ago") fresh.
+setInterval(() => { if (currentWidget().kind === 'todo' && todos.length) { renderWidget(); } }, 60000);

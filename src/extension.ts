@@ -2,6 +2,10 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ConversationStore } from './conversationStore';
+import { TodoManager, TodoAction } from './services/todoManager';
+import { WorkspaceContextService } from './services/workspaceContext';
+import { FocusMonitor } from './services/focusMonitor';
+import { EnvMonitor } from './services/envMonitor';
 
 function parseEnvFile(filePath: string): Record<string, string> {
   const cfg: Record<string, string> = {};
@@ -114,12 +118,28 @@ export class CompanionViewProvider implements vscode.WebviewViewProvider {
   private _characters: CharacterMeta[];
   private _backendUrl: string;
   private _quotes: string[];
+  private _todos: TodoManager;
+  private _workspace: WorkspaceContextService;
+  private _focus: FocusMonitor;
+  private _env: EnvMonitor;
 
   constructor(private readonly context: vscode.ExtensionContext) {
     this._store = new ConversationStore(context);
     this._cfg = loadConfig(context.extensionPath);
     this._characters = loadCharacters(context.extensionPath, this._cfg);
     this._quotes = loadQuotes(context.extensionPath);
+
+    // Productivity-partner services
+    this._todos = new TodoManager(context);
+    this._workspace = new WorkspaceContextService();
+    this._focus = new FocusMonitor(() => this._intervene('tabSwitch'));
+    this._env = new EnvMonitor(() => this._intervene('envIdle'));
+    this._workspace.onChange((snap) => this.trigger('workspaceContext', { context: snap }));
+    context.subscriptions.push(
+      { dispose: () => this._workspace.dispose() },
+      { dispose: () => this._focus.dispose() },
+      { dispose: () => this._env.dispose() },
+    );
     const port = this._cfg['PORT'] || '5001';
     this._backendUrl = vscode.workspace.getConfiguration('mommyasmr').get<string>('backendUrl')
       || vscode.workspace.getConfiguration('mommyasmr').get<string>('backendUrl')
@@ -167,6 +187,8 @@ export class CompanionViewProvider implements vscode.WebviewViewProvider {
       elevenLabsKey: this._cfg['ELEVENLABS_API_KEY'] || '',
       emotionUris: this._buildEmotionUris(webviewView.webview),
       quotes: this._quotes,
+      todos: this._todos.list(),
+      workspaceContext: this._workspace.snapshot(),
     };
     void webviewView.webview.postMessage(initPayload);
     this.context.subscriptions.push(
@@ -242,7 +264,8 @@ export class CompanionViewProvider implements vscode.WebviewViewProvider {
           break;
         }
         try {
-          // Extension host proxies to Flask — avoids CORS issues from the webview sandbox
+          // Extension host proxies to Flask — avoids CORS issues from the webview sandbox.
+          // The extension owns the authoritative todo + workspace state and injects it here.
           const response = await fetch(this._backendUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -255,6 +278,9 @@ export class CompanionViewProvider implements vscode.WebviewViewProvider {
               conversationId: String(msg.conversationId ?? ''),
               editorContext: msg.editorContext ?? {},
               history: msg.history ?? [],
+              directive: Boolean(msg.directive),
+              todos: this._todos.list(),
+              workspaceContext: this._workspace.snapshot(),
             }),
           });
 
@@ -269,7 +295,14 @@ export class CompanionViewProvider implements vscode.WebviewViewProvider {
             audioBase64?: string;
             audioMimeType?: string;
             audioError?: string;
+            actions?: TodoAction[];
+            widget?: Record<string, unknown> | null;
           };
+
+          // Apply any AI-issued todo operations, then push the fresh list to the UI.
+          if (this._todos.applyActions(data.actions)) {
+            this._broadcastTodos();
+          }
 
           webview.postMessage({
             type: 'backendResponse',
@@ -279,6 +312,7 @@ export class CompanionViewProvider implements vscode.WebviewViewProvider {
             audioBase64: data.audioBase64 ?? '',
             audioMimeType: data.audioMimeType ?? 'audio/mpeg',
             audioError: data.audioError ?? '',
+            widget: data.widget ?? null,
           });
         } catch (error) {
           webview.postMessage({
@@ -381,6 +415,25 @@ export class CompanionViewProvider implements vscode.WebviewViewProvider {
         await this.context.globalState.update('mommyasmr.activeProfile', msg.profile as string);
         break;
       }
+      case 'todoAction': {
+        // Manual todo interaction from the widget (click to cycle status / delete).
+        const action = msg.action as TodoAction | undefined;
+        if (action && this._todos.applyActions([action])) {
+          this._broadcastTodos();
+        }
+        break;
+      }
+      case 'requestTodos': {
+        this._broadcastTodos();
+        break;
+      }
+      case 'openExternal': {
+        const url = String(msg.url ?? '');
+        if (/^https?:\/\//i.test(url)) {
+          void vscode.env.openExternal(vscode.Uri.parse(url));
+        }
+        break;
+      }
       case 'getEditorContext': {
         const editor = vscode.window.activeTextEditor;
         if (editor) {
@@ -458,6 +511,16 @@ export class CompanionViewProvider implements vscode.WebviewViewProvider {
 
   public trigger(type: string, payload?: Record<string, unknown>): void {
     this._view?.webview.postMessage({ type, ...payload });
+  }
+
+  private _broadcastTodos(): void {
+    this.trigger('todos', { todos: this._todos.list() });
+  }
+
+  /** Ask the webview to deliver an in-character spoken intervention. */
+  private _intervene(kind: 'tabSwitch' | 'envIdle'): void {
+    if (!this._view) { return; }
+    this.trigger('intervention', { kind, context: this._workspace.snapshot() });
   }
 }
 

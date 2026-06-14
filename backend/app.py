@@ -116,26 +116,13 @@ def generate_with_openai(*, system_prompt: str, user_prompt: str, json_mode: boo
             {"role": "user", "content": user_prompt},
         ],
         "temperature": 0.7,
-        "max_tokens": 400,
+        "max_tokens": 600,
     }
     if json_mode:
-        # Structured output: the model is constrained to this exact schema (no prose preamble).
-        body["response_format"] = {
-            "type": "json_schema",
-            "json_schema": {
-                "name": "companion_reply",
-                "strict": True,
-                "schema": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "properties": {
-                        "text": {"type": "string"},
-                        "emotion": {"type": "string", "enum": REPLY_EMOTIONS},
-                    },
-                    "required": ["text", "emotion"],
-                },
-            },
-        }
+        # JSON mode still forbids prose preambles ("Here's your JSON...") but, unlike a
+        # strict schema, leaves room for the optional `actions`/`widget` fields. The exact
+        # shape is specified in the system prompt.
+        body["response_format"] = {"type": "json_object"}
     resp = requests.post(f"{OPENAI_BASE}/chat/completions", headers=headers, json=body, timeout=60)
     if resp.status_code != 200:
         raise RuntimeError(format_openai_error(resp))
@@ -368,17 +355,114 @@ def safe_json_loads(text: str) -> Dict[str, Any]:
 def build_system_prompt(character_prompt: str, character_name: str) -> str:
     role = character_name or "the companion"
     return (
-        f"You are {role}, a voice-reactive VS Code companion. "
+        f"You are {role}, a voice-reactive VS Code companion AND a hands-on productivity "
+        "partner for a developer (not a passive autocomplete). "
         "Reply with ONLY a single JSON object and nothing else — no preamble, no "
         "explanation, no 'here is the JSON', no markdown fences. "
-        'The JSON schema is {"text":"...","emotion":"happy|sad|angry|surprised|supportive|thinking|concerned"}. '
+        'The JSON shape is: {"text":"...", "emotion":"happy|sad|angry|surprised|supportive|thinking|concerned", '
+        '"actions":[...optional...], "widget":{...optional...}}. '
         "The \"text\" value will be read aloud by a text-to-speech voice, so it MUST be "
         "one to three natural spoken sentences of plain English. In \"text\" do NOT use "
         "emojis, emoticons (like :) or :D), markdown, asterisks, backticks, code blocks, "
         "bullet points, URLs, file paths, or any symbols a person would not say out loud. "
-        "Spell things out as words. Put the feeling in the \"emotion\" field, not in symbols."
+        "Spell things out as words. Put the feeling in the \"emotion\" field, not in symbols.\n\n"
+        "TODO LIST: You can manage the developer's todo list. When (and only when) they ask "
+        "you to, include an \"actions\" array of operations. Each operation is one of: "
+        '{"action":"add","text":"<task>"}, '
+        '{"action":"move","id":"<id or task text>","status":"todo|in-progress|done"}, '
+        '{"action":"complete","id":"<id or task text>"}, '
+        '{"action":"delete","id":"<id or task text>"}. '
+        "Use the ids from the CURRENT TODOS provided below; if unsure, pass the task text as the id. "
+        "After acting, confirm conversationally in \"text\" (e.g. 'Added that to your list.'). "
+        "If no todo change is requested, omit \"actions\" or use an empty array.\n\n"
+        "WIDGETS: To celebrate a real achievement (a finished task, a hard bug squashed, or when "
+        'they ask to celebrate), include {"widget":{"type":"celebration"}}. '
+        "To share a learning resource, tutorial, documentation, or useful website they asked for, "
+        'include {"widget":{"type":"resource","title":"...","description":"<one short line>",'
+        '"url":"https://...","query":"<search terms>","label":"Open"}}. '
+        "For \"url\", ONLY give a real link you are highly confident exists — prefer the canonical "
+        "root or docs homepage of a well-known project (e.g. https://react.dev, "
+        "https://docs.python.org/3/) rather than guessing a deep path that may be a dead link. "
+        "ALWAYS also include \"query\": a few plain search keywords for the topic; it is used as a "
+        "reliable fallback link if the url is unreachable. If you are not sure of an exact url, you "
+        "may omit \"url\" and just provide \"query\".\n\n"
+        "Only include \"widget\" when warranted; otherwise omit it.\n\n"
+        "WORKSPACE AWARENESS: You are given the developer's current file, language, and open tabs "
+        "below. Reference them naturally when relevant (e.g. notice they are bouncing between files, "
+        "or that they are on a sensitive .env file). Be a focused, encouraging thinking partner."
         + (f"\n\nPersona prompt:\n{character_prompt.strip()}" if character_prompt.strip() else "")
     )
+
+
+def _format_todos(todos: List[Dict[str, Any]]) -> str:
+    if not todos:
+        return "(empty)"
+    lines = []
+    for t in todos[:50]:
+        lines.append(f"- id={t.get('id')} | [{t.get('status')}] {t.get('text')}")
+    return "\n".join(lines)
+
+
+def _format_workspace(ctx: Dict[str, Any]) -> str:
+    if not ctx or not ctx.get("activeFile"):
+        return "(no file open)"
+    parts = [f"active={ctx.get('activeFile')} ({ctx.get('language')})"]
+    if ctx.get("dirty"):
+        parts.append("unsaved changes")
+    if ctx.get("untitled"):
+        parts.append("untitled")
+    tabs = ctx.get("openTabs") or []
+    if tabs:
+        parts.append("open tabs: " + ", ".join(str(t.get("name")) for t in tabs[:12]))
+    return " | ".join(parts)
+
+
+def _search_url(terms: str) -> str:
+    from urllib.parse import quote_plus
+    return "https://www.google.com/search?q=" + quote_plus(terms.strip())
+
+
+def _url_is_reachable(url: str) -> bool:
+    """Best-effort liveness check. Treats auth/forbidden/method-not-allowed as 'exists'
+    (the page is there, it just doesn't like our bare request). Only a real 404/410 or a
+    connection failure counts as dead."""
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; MommyASMR/1.0)"}
+    for method in ("head", "get"):
+        try:
+            resp = requests.request(
+                method, url, headers=headers, timeout=4,
+                allow_redirects=True, stream=(method == "get"),
+            )
+            if method == "get":
+                resp.close()
+            if resp.status_code in (404, 410):
+                return False
+            if resp.status_code < 400 or resp.status_code in (401, 403, 405, 406, 429):
+                return True
+            # 5xx or other 4xx: try GET once, else assume reachable rather than nuke a good link.
+            if method == "get":
+                return True
+        except requests.RequestException:
+            if method == "get":
+                return False
+    return False
+
+
+def _repair_resource_widget(widget: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Guarantee the resource button points at a link that actually opens. Validates the
+    model's url; on a dead/missing link, falls back to a Google search of the query/title."""
+    if not isinstance(widget, dict) or widget.get("type") != "resource":
+        return widget
+    url = str(widget.get("url", "")).strip()
+    query = str(widget.get("query", "")).strip()
+    title = str(widget.get("title", "")).strip()
+    fallback_terms = query or title or "developer documentation"
+
+    valid = bool(re.match(r"^https?://", url, re.I)) and _url_is_reachable(url)
+    if not valid:
+        widget["url"] = _search_url(fallback_terms)
+    widget.pop("query", None)  # internal-only; the webview never reads it
+    return widget
 
 
 def call_gemini(
@@ -387,7 +471,9 @@ def call_gemini(
     editor_context: Dict[str, Any],
     character_prompt: str,
     character_name: str,
-) -> Dict[str, str]:
+    todos: Optional[List[Dict[str, Any]]] = None,
+    workspace_context: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     system_prompt = build_system_prompt(character_prompt, character_name)
     history_lines: List[str] = []
     for item in history[-10:]:
@@ -396,14 +482,7 @@ def call_gemini(
         if content:
             history_lines.append(f"{role}: {content}")
 
-    editor_parts: List[str] = []
-    if editor_context.get("fileName"):
-        editor_parts.append(f"file={editor_context['fileName']}")
-    if editor_context.get("language"):
-        editor_parts.append(f"language={editor_context['language']}")
-    if editor_context.get("selectedText"):
-        selected = str(editor_context["selectedText"])
-        editor_parts.append(f"selection={selected[:600]}")
+    selected = str((editor_context or {}).get("selectedText", ""))
 
     user_prompt = "\n".join(
         [
@@ -413,15 +492,20 @@ def call_gemini(
             "Recent conversation:",
             "\n".join(history_lines) if history_lines else "(none)",
             "",
-            "Editor context:",
-            " | ".join(editor_parts) if editor_parts else "(none)",
+            "WORKSPACE:",
+            _format_workspace(workspace_context or {}),
+            ("Selection:\n" + selected[:600]) if selected else "",
             "",
-            'Return only JSON with keys "text" and "emotion".',
+            "CURRENT TODOS:",
+            _format_todos(todos or []),
+            "",
+            'Return only the JSON object described in your instructions.',
         ]
     )
 
     text = generate_with_openai(system_prompt=system_prompt, user_prompt=user_prompt, json_mode=True)
 
+    parsed: Dict[str, Any] = {}
     try:
         parsed = safe_json_loads(text)
         spoken = str(parsed.get("text", "")).strip() or extract_spoken_text(text)
@@ -433,7 +517,11 @@ def call_gemini(
     spoken = sanitize_for_speech(spoken)
     if not spoken:
         spoken = "Let me think about that for a second."
-    return {"text": spoken, "emotion": emotion}
+
+    actions = parsed.get("actions") if isinstance(parsed.get("actions"), list) else []
+    widget = parsed.get("widget") if isinstance(parsed.get("widget"), dict) else None
+    widget = _repair_resource_widget(widget)
+    return {"text": spoken, "emotion": emotion, "actions": actions, "widget": widget}
 
 
 def _ffmpeg_path() -> str:
@@ -763,6 +851,8 @@ def respond() -> Any:
     character_prompt = str(payload.get("characterPrompt", "")).strip()
     character_name = str(payload.get("characterName", "")).strip()
     voice_id = str(payload.get("voiceId", "")).strip()
+    todos = payload.get("todos") or []
+    workspace_context = payload.get("workspaceContext") or {}
 
     if not transcript and audio_b64:
         try:
@@ -775,14 +865,19 @@ def respond() -> Any:
         return jsonify({"text": "I did not catch that.", "emotion": "thinking"}), 400
 
     try:
-        reply = call_gemini(transcript, history, editor_context, character_prompt, character_name)
+        reply = call_gemini(
+            transcript, history, editor_context, character_prompt, character_name,
+            todos=todos, workspace_context=workspace_context,
+        )
         response_payload: Dict[str, Any] = {
-            "text": reply.get("text", "").strip(),
+            "text": str(reply.get("text", "")).strip(),
             "emotion": reply.get("emotion", "supportive") or "supportive",
             "transcript": transcript,
+            "actions": reply.get("actions") or [],
+            "widget": reply.get("widget"),
         }
         try:
-            response_payload.update(synthesize_speech(reply["text"], voice_id))
+            response_payload.update(synthesize_speech(str(reply["text"]), voice_id))
         except Exception as tts_exc:
             response_payload["audioError"] = str(tts_exc)
         return jsonify(response_payload)

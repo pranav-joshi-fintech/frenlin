@@ -677,6 +677,119 @@ body.vscode-light {
   transform: rotate(120deg);
 }
 
+/* ── Widget area (todo tracker / celebration / resource) ────────────────── */
+.widget-area { width: 100%; }
+.widget {
+  width: 100%;
+  background: color-mix(in srgb, var(--char-color) 6%, var(--bg2));
+  border: 1px solid color-mix(in srgb, var(--char-color) 18%, var(--border));
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  position: relative;
+}
+.widget-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 6px;
+}
+.widget-title { font-size: 11px; color: var(--char-color); letter-spacing: 0.5px; }
+.widget-count { font-size: 10px; }
+.widget-context {
+  font-size: 10px; margin-bottom: 8px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  opacity: 0.8;
+}
+
+/* Todo list */
+.todo-list {
+  list-style: none; margin: 0; padding: 0;
+  max-height: 168px; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.todo-empty { font-size: 11px; padding: 6px 2px; line-height: 1.4; }
+.todo-item {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  align-items: center; gap: 8px;
+  padding: 6px 8px;
+  background: var(--bg3);
+  border-radius: 6px;
+  border-left: 2px solid var(--text-dim);
+  transition: border-color 0.15s, opacity 0.15s;
+}
+.todo-item.status-in-progress { border-left-color: var(--gold); }
+.todo-item.status-done { border-left-color: #4ade80; opacity: 0.62; }
+.todo-status {
+  font-family: var(--font-mono); font-size: 9px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.4px;
+  padding: 3px 7px; border-radius: 4px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--bg2); color: var(--text-dim);
+  white-space: nowrap; transition: color 0.15s, border-color 0.15s;
+}
+.todo-status:hover { color: var(--text); border-color: var(--char-color); }
+.todo-item.status-in-progress .todo-status { color: var(--gold); border-color: color-mix(in srgb, var(--gold) 50%, transparent); }
+.todo-item.status-done .todo-status { color: #4ade80; border-color: color-mix(in srgb, #4ade80 50%, transparent); }
+.todo-text { font-size: 12px; line-height: 1.35; word-break: break-word; }
+.todo-item.status-done .todo-text { text-decoration: line-through; }
+.todo-age { font-size: 9px; white-space: nowrap; }
+.todo-del {
+  background: none; border: none; cursor: pointer; color: var(--text-dim);
+  font-size: 12px; padding: 2px 4px; border-radius: 4px; line-height: 1;
+  transition: color 0.15s, background 0.15s;
+}
+.todo-del:hover { color: #e05555; background: rgba(220,60,60,0.15); }
+
+/* Resource card */
+.resource-widget { padding-right: 30px; }
+.resource-dismiss {
+  position: absolute; top: 8px; right: 8px;
+  background: none; border: none; cursor: pointer; color: var(--text-dim);
+  font-size: 13px; line-height: 1; padding: 2px 4px; border-radius: 4px;
+}
+.resource-dismiss:hover { color: var(--text); }
+.resource-title { font-size: 13px; font-weight: 700; margin-bottom: 4px; }
+.resource-desc { font-size: 11px; line-height: 1.45; margin-bottom: 10px; }
+.resource-link {
+  display: inline-block; padding: 6px 14px; cursor: pointer;
+  border: 1px solid var(--char-color);
+  background: color-mix(in srgb, var(--char-color) 22%, var(--bg2));
+  color: var(--text); border-radius: var(--radius); font-size: 12px;
+  transition: background 0.15s, transform 0.15s;
+}
+.resource-link:hover { background: color-mix(in srgb, var(--char-color) 34%, var(--bg2)); transform: translateY(-1px); }
+
+/* Celebration */
+.celebration-widget {
+  min-height: 96px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 4px; overflow: hidden;
+}
+.celebration-emoji {
+  font-size: 40px; line-height: 1;
+  animation: celebrate-pop 1.2s ease-in-out 3;
+}
+.celebration-text {
+  font-size: 13px; font-weight: 700; color: var(--char-color);
+}
+@keyframes celebrate-pop {
+  0%   { transform: scale(0.6) rotate(-8deg); opacity: 0.6; }
+  40%  { transform: scale(1.25) rotate(6deg); opacity: 1; }
+  70%  { transform: scale(0.95) rotate(-3deg); }
+  100% { transform: scale(1) rotate(0deg); }
+}
+.confetti { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.confetti span {
+  position: absolute; top: -12px; width: 7px; height: 12px; border-radius: 1px;
+  left: calc((var(--i) + 1) * 6%);
+  background: hsl(calc(var(--i) * 40), 85%, 60%);
+  animation: confetti-fall 1.2s linear 3;
+  animation-delay: calc(var(--i) * 60ms);
+  opacity: 0.9;
+}
+@keyframes confetti-fall {
+  0%   { transform: translateY(-12px) rotate(0deg); opacity: 1; }
+  100% { transform: translateY(120px) rotate(360deg); opacity: 0; }
+}
+
 /* ── Narrow viewport tweaks ─────────────────────────────────────────────── */
 @media (max-width: 360px) {
   .stage-row { grid-template-columns: 1fr; }

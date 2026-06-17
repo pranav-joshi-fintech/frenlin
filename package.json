@@ -1,17 +1,17 @@
 {
-  "name": "mommyasmr-ai",
-  "displayName": "MOMMY ASMR",
-  "description": "A voice-to-voice AI coding companion.",
+  "name": "frenlin",
+  "displayName": "Frenlin",
+  "description": "Frenlin — your AI conversationalist aid. A voice-to-voice AI coding companion.",
   "version": "0.2.0",
-  "publisher": "mommyasmr",
+  "publisher": "frenlin",
   "engines": { "vscode": "^1.85.0" },
   "categories": ["Other"],
   "main": "./out/extension.js",
   "contributes": {
     "configuration": {
-      "title": "MOMMY ASMR",
+      "title": "Frenlin",
       "properties": {
-        "mommyasmr.backendUrl": {
+        "frenlin.backendUrl": {
           "type": "string",
           "default": "http://127.0.0.1:5001/respond",
           "description": "Flask backend endpoint that receives transcripts and returns a response payload."
@@ -21,31 +21,31 @@
     "viewsContainers": {
       "activitybar": [
         {
-          "id": "mommyasmr-sidebar",
-          "title": "MOMMY ASMR",
+          "id": "frenlin-sidebar",
+          "title": "Frenlin",
           "icon": "media/icons/sidebar-icon.svg"
         }
       ]
     },
     "views": {
-      "mommyasmr-sidebar": [
+      "frenlin-sidebar": [
         {
           "type": "webview",
-          "id": "mommyasmr.companion",
+          "id": "frenlin.companion",
           "name": "Companion"
         }
       ]
     },
     "commands": [
-      { "command": "mommyasmr.openPanel",          "title": "Open Companion",             "category": "MOMMY ASMR" },
-      { "command": "mommyasmr.newConversation",     "title": "New Conversation",           "category": "MOMMY ASMR" },
-      { "command": "mommyasmr.deleteConversation",  "title": "Delete Conversation",        "category": "MOMMY ASMR" },
-      { "command": "mommyasmr.toggleHistory",       "title": "Toggle Session History",     "category": "MOMMY ASMR" },
-      { "command": "mommyasmr.switchProfile",       "title": "Switch Voice Profile",       "category": "MOMMY ASMR" },
-      { "command": "mommyasmr.openMicSettings",      "title": "Open Microphone Settings",   "category": "MOMMY ASMR" }
+      { "command": "frenlin.openPanel",          "title": "Open Companion",             "category": "Frenlin" },
+      { "command": "frenlin.newConversation",     "title": "New Conversation",           "category": "Frenlin" },
+      { "command": "frenlin.deleteConversation",  "title": "Delete Conversation",        "category": "Frenlin" },
+      { "command": "frenlin.toggleHistory",       "title": "Toggle Session History",     "category": "Frenlin" },
+      { "command": "frenlin.switchProfile",       "title": "Switch Voice Profile",       "category": "Frenlin" },
+      { "command": "frenlin.openMicSettings",      "title": "Open Microphone Settings",   "category": "Frenlin" }
     ],
     "keybindings": [
-      { "command": "mommyasmr.openPanel", "key": "ctrl+shift+m", "mac": "cmd+shift+m" }
+      { "command": "frenlin.openPanel", "key": "ctrl+shift+m", "mac": "cmd+shift+m" }
     ]
   },
   "scripts": {

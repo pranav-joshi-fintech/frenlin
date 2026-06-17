@@ -1,4 +1,4 @@
-# MOMMY ASMR — Workflow & Architecture
+# Frenlin — Workflow & Architecture
 
 A voice-to-voice AI coding companion. There are three runtime pieces:
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start the MOMMY ASMR backend with the correct virtualenv.
+# Start the Frenlin backend with the correct virtualenv.
 # Works on Windows (Git Bash: .venv/Scripts) and macOS/Linux (.venv/bin).
 set -euo pipefail
 cd "$(dirname "$0")"

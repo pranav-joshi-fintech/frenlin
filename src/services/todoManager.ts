@@ -29,7 +29,7 @@ function uid(): string {
  * Insertion order is preserved across sessions because we persist a plain array.
  */
 export class TodoManager {
-  private readonly KEY = 'mommyasmr.todos.v1';
+  private readonly KEY = 'frenlin.todos.v1';
   private _todos: Todo[];
 
   constructor(private readonly ctx: vscode.ExtensionContext) {

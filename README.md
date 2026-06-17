@@ -1,6 +1,6 @@
-# MOMMY ASMR — VS Code Companion Extension
+# Frenlin — Your AI Conversationalist Aid
 
-> Your voice-to-voice coding gremlin. Direct, intense, occasionally unhinged, and weirdly, genuinely supportive.
+> A voice-to-voice coding companion. Direct, intense, occasionally unhinged, and weirdly, genuinely supportive.
 
 Most AI tools wait politely for you to type. This one *talks back*. Speak your bugs, your frustrations, and your 2 AM existential dread out loud — and get a real spoken response with attitude. It tracks your todos, calls you out when you doomscroll between tabs, and yells at you when you've been staring at your `.env` for half a minute like it's going to fix itself.
 
@@ -91,7 +91,7 @@ pip install -r requirements.txt
 python app.py
 ```
 
-**Important:** If you previously had a `mommyasmr-ai` venv, delete `backend/.venv` and recreate it (the old venv may point to the wrong path).
+**Important:** If you previously had a `frenlin` venv (or an older `mommyasmr-ai` / `vegetaasmr-ai` one), delete `backend/.venv` and recreate it (the old venv may point to the wrong path).
 
 The server runs at `http://127.0.0.1:5001`.
 
@@ -110,7 +110,7 @@ If voice doesn't cooperate, just type in the text box below the dialogue. The co
 ## Architecture
 
 ```
-mommyasmr-ai/
+frenlin/
 ├── backend/
 │   └── app.py                      — Flask API (ChatGPT + Whisper + ElevenLabs)
 ├── src/

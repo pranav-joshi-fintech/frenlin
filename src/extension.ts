@@ -86,8 +86,7 @@ function loadCharacters(extensionPath: string, cfg: Record<string, string>): Cha
 }
 
 function getActiveProfile(context: vscode.ExtensionContext, fallback: string): string {
-  return context.globalState.get<string>('mommyasmr.activeProfile')
-    ?? context.globalState.get<string>('mommyasmr.activeProfile')
+  return context.globalState.get<string>('frenlin.activeProfile')
     ?? fallback;
 }
 
@@ -111,7 +110,7 @@ function loadQuotes(extensionPath: string): string[] {
 }
 
 export class CompanionViewProvider implements vscode.WebviewViewProvider {
-  public static readonly viewType = 'mommyasmr.companion';
+  public static readonly viewType = 'frenlin.companion';
   private _view?: vscode.WebviewView;
   private _store: ConversationStore;
   private _cfg: Record<string, string>;
@@ -141,10 +140,8 @@ export class CompanionViewProvider implements vscode.WebviewViewProvider {
       { dispose: () => this._env.dispose() },
     );
     const port = this._cfg['PORT'] || '5001';
-    this._backendUrl = vscode.workspace.getConfiguration('mommyasmr').get<string>('backendUrl')
-      || vscode.workspace.getConfiguration('mommyasmr').get<string>('backendUrl')
-      || this._cfg['VEGETAASMR_BACKEND_URL']
-      || this._cfg['MOMMYASMR_BACKEND_URL']
+    this._backendUrl = vscode.workspace.getConfiguration('frenlin').get<string>('backendUrl')
+      || this._cfg['FRENLIN_BACKEND_URL']
       || this._cfg['FLASK_BACKEND_URL']
       || `http://127.0.0.1:${port}/respond`;
   }
@@ -412,7 +409,7 @@ export class CompanionViewProvider implements vscode.WebviewViewProvider {
         break;
       }
       case 'setActiveProfile': {
-        await this.context.globalState.update('mommyasmr.activeProfile', msg.profile as string);
+        await this.context.globalState.update('frenlin.activeProfile', msg.profile as string);
         break;
       }
       case 'todoAction': {
@@ -500,7 +497,7 @@ export class CompanionViewProvider implements vscode.WebviewViewProvider {
              connect-src 'none';"/>
   <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
   <link rel="stylesheet" href="${styleUri}"/>
-  <title>MOMMY ASMR</title>
+  <title>Frenlin</title>
 </head>
 <body>
 <div id="root"></div>
@@ -535,12 +532,12 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   const cmds: [string, () => void][] = [
-    ['mommyasmr.newConversation',    () => provider.trigger('triggerNew')],
-    ['mommyasmr.deleteConversation', () => provider.trigger('triggerDelete')],
-    ['mommyasmr.toggleHistory',      () => provider.trigger('triggerHistory')],
-    ['mommyasmr.switchProfile',      () => provider.trigger('triggerProfileMenu')],
-    ['mommyasmr.openPanel',          () => vscode.commands.executeCommand('workbench.view.extension.mommyasmr-sidebar')],
-    ['mommyasmr.openMicSettings',    () => openMicrophoneSettings()],
+    ['frenlin.newConversation',    () => provider.trigger('triggerNew')],
+    ['frenlin.deleteConversation', () => provider.trigger('triggerDelete')],
+    ['frenlin.toggleHistory',      () => provider.trigger('triggerHistory')],
+    ['frenlin.switchProfile',      () => provider.trigger('triggerProfileMenu')],
+    ['frenlin.openPanel',          () => vscode.commands.executeCommand('workbench.view.extension.frenlin-sidebar')],
+    ['frenlin.openMicSettings',    () => openMicrophoneSettings()],
   ];
 
   for (const [cmd, fn] of cmds) {

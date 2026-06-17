@@ -1,4 +1,4 @@
-// ── MOMMY ASMR webview — complete frontend ────────────────────────────────
+// ── Frenlin webview — complete frontend ───────────────────────────────────
 // Runs in VS Code webview context (browser-like, no Node APIs)
 
 declare function acquireVsCodeApi(): VSCodeApi;
@@ -679,7 +679,7 @@ async function startRecording(): Promise<void> {
     stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   } catch (err) {
     const detail = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
-    console.warn('[mommyasmr] getUserMedia blocked, using backend capture instead:', detail);
+    console.warn('[frenlin] getUserMedia blocked, using backend capture instead:', detail);
     backendListen();   // fall back to the Python/ffmpeg mic path
     return;
   }
@@ -851,7 +851,7 @@ function playAudioBase64(audioBase64: string, mimeType: string): void {
         src.onended = finish;
         src.start();
       } catch (err) {
-        console.warn('[mommyasmr] web-audio playback failed, using element fallback:', err);
+        console.warn('[frenlin] web-audio playback failed, using element fallback:', err);
         playAudioElementFallback(bytes, mimeType);
       }
     })();
@@ -882,7 +882,7 @@ function playAudioElementFallback(bytes: Uint8Array, mimeType: string): void {
     if (watchdog) { clearTimeout(watchdog); }
     watchdog = window.setTimeout(() => finish(), ms);
   };
-  audio.play().catch((err) => { console.warn('[mommyasmr] audio playback blocked:', err); });
+  audio.play().catch((err) => { console.warn('[frenlin] audio playback blocked:', err); });
 }
 
 // ── AI call ───────────────────────────────────────────────────────────────
@@ -1222,7 +1222,7 @@ window.addEventListener('message', (ev) => {
         playAudioBase64(audioBase64, audioMimeType);   // next turn continues when it ends
       } else {
         if (audioError) {
-          console.warn('[mommyasmr] voice synthesis failed:', audioError);
+          console.warn('[frenlin] voice synthesis failed:', audioError);
           vscode.postMessage({ type: 'showError', text: `Voice unavailable: ${audioError}` });
         }
         continueConversation();                         // no audio to wait on → next turn now

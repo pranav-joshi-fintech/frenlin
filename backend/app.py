@@ -426,7 +426,7 @@ def _url_is_reachable(url: str) -> bool:
     """Best-effort liveness check. Treats auth/forbidden/method-not-allowed as 'exists'
     (the page is there, it just doesn't like our bare request). Only a real 404/410 or a
     connection failure counts as dead."""
-    headers = {"User-Agent": "Mozilla/5.0 (compatible; MommyASMR/1.0)"}
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; Frenlin/1.0)"}
     for method in ("head", "get"):
         try:
             resp = requests.request(

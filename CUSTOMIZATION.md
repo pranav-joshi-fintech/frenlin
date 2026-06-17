@@ -1,4 +1,4 @@
-# Vegeta ASMR — Customization Guide
+# Frenlin — Customization Guide
 
 Everything you need to plug in real assets, voices, and API keys.
 
@@ -28,7 +28,7 @@ ELEVENLABS_API_KEY=...
 VEGETA_VOICE_ID=...
 FRIERAN_VOICE_ID=...
 ZOEY_VOICE_ID=...
-VEGETAASMR_BACKEND_URL=http://127.0.0.1:5001/respond
+FRENLIN_BACKEND_URL=http://127.0.0.1:5001/respond
 ```
 
 ---
@@ -69,10 +69,10 @@ Each `prompt.txt` is sent to Gemini as the persona for that character.
 ## 5. First-Time Setup
 
 ```bash
-cd vegetaasmr-ai
+cd frenlin
 npm install
 npm run compile
 cd backend && pip install -r requirements.txt && python app.py
 ```
 
-Press `F5` in VS Code, open the Vegeta ASMR sidebar, and click the mic button to start talking.
+Press `F5` in VS Code, open the Frenlin sidebar, and click the mic button to start talking.

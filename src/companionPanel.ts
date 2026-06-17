@@ -13,8 +13,8 @@ export class CompanionPanel {
       return CompanionPanel.currentPanel;
     }
     const panel = vscode.window.createWebviewPanel(
-      'mommyasmr',
-      'MOMMY ASMR',
+      'frenlin',
+      'Frenlin',
       column,
       {
         enableScripts: true,

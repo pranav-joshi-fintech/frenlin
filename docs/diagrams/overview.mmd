@@ -1,0 +1,9 @@
+flowchart LR
+    A["You speak"] --> B["VS Code Extension"]
+    B --> C["Whisper<br/>speech to text"]
+    C --> D["GPT<br/>in-character reply"]
+    D --> E["ElevenLabs<br/>text to speech"]
+    E --> F["Companion talks back<br/>+ tracks your todos"]
+
+    classDef big fill:#5b8def,stroke:#2c4b8f,color:#fff,font-size:22px,padding:16px;
+    class A,B,C,D,E,F big;

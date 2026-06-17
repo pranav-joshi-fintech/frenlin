@@ -1,0 +1,51 @@
+graph TB
+    subgraph Webview["Webview (sandboxed UI) - webview.ts"]
+        UI["Avatar / Waveform / Chat / Todo board / Resource and Celebration widgets"]
+        Mic["Mic button / Text input"]
+        Audio["AudioContext playback (TTS)"]
+    end
+
+    subgraph Host["Extension Host (Node) - extension.ts"]
+        Provider["CompanionViewProvider<br/>(message router + network proxy)"]
+        Store["ConversationStore<br/>(globalState)"]
+        Todos["TodoManager<br/>(globalState)"]
+        WS["WorkspaceContextService<br/>(active file, tabs, dirty)"]
+        Focus["FocusMonitor<br/>(tab-thrash detector)"]
+        Env["EnvMonitor<br/>(.env dwell timer)"]
+    end
+
+    subgraph Backend["Flask Backend - app.py"]
+        Listen["/listen - ffmpeg VAD record"]
+        Stop["/stop - interrupt recording"]
+        Respond["/respond - generate reply + TTS"]
+        Health["/health"]
+    end
+
+    subgraph Ext["External APIs"]
+        Whisper["OpenAI Whisper (STT)"]
+        GPT["OpenAI Chat (reply JSON)"]
+        Eleven["ElevenLabs (TTS)"]
+    end
+
+    Files["characters/ (prompts + emotion art)<br/>config/keys.env / backend/.env / quotes.txt"]
+
+    Mic -->|postMessage| Provider
+    UI -->|postMessage| Provider
+    Provider -->|postMessage| UI
+    Provider --> Audio
+
+    Provider <-->|HTTP proxy| Listen
+    Provider <-->|HTTP proxy| Respond
+    Provider -->|HTTP| Stop
+
+    Listen --> Whisper
+    Respond --> Whisper
+    Respond --> GPT
+    Respond --> Eleven
+
+    Provider -.reads.- Files
+    Provider --- Store
+    Provider --- Todos
+    Provider --- WS
+    Focus -.fires.-> Provider
+    Env -.fires.-> Provider

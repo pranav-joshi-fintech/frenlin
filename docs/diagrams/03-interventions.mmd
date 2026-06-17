@@ -1,0 +1,13 @@
+flowchart TD
+    subgraph Triggers
+        F["FocusMonitor:<br/>more than 5 tab switches in 15s<br/>with no edits"]
+        E["EnvMonitor:<br/>30s idle on a .env file"]
+    end
+
+    F -->|cooldown 5 min| INT
+    E -->|once per visit| INT
+    INT["_intervene(kind)"] -->|trigger intervention| WV["Webview"]
+    WV --> DIR["Build in-character directive<br/>(focus nudge / .env warning)"]
+    DIR -->|sendTranscript directive=true| H["Extension Host"]
+    H -->|/respond| BK["Backend then OpenAI then ElevenLabs"]
+    BK -->|spoken reply| WV2["Webview speaks it aloud"]

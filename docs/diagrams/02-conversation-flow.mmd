@@ -1,0 +1,33 @@
+sequenceDiagram
+    actor User
+    participant W as Webview
+    participant H as Extension Host
+    participant B as Flask Backend
+    participant AI as OpenAI
+    participant EL as ElevenLabs
+
+    User->>W: Tap mic (or type)
+    W->>H: startBackendListen
+    H->>B: POST /listen
+    B->>B: ffmpeg captures until pause (VAD)
+    B->>AI: Whisper transcription
+    AI-->>B: transcript text
+    B-->>H: { transcript }
+    H-->>W: sttResult
+
+    W->>H: sendTranscript (transcript, history, editorContext)
+    Note over H: Inject authoritative<br/>todos + workspace snapshot
+    H->>B: POST /respond
+    B->>B: build_system_prompt(persona)
+    B->>AI: Chat completion (JSON mode)
+    AI-->>B: { text, emotion, actions, widget }
+    B->>B: sanitize text / validate resource URL
+    B->>EL: synthesize_speech(text, voiceId)
+    EL-->>B: MP3 (base64)
+    B-->>H: { text, emotion, audio, actions, widget }
+
+    Note over H: Apply todo actions then<br/>broadcast updated list
+    H-->>W: backendResponse
+    W->>W: setEmotion(avatar) / render widgets
+    W->>User: Play voice + show reply
+    W->>H: saveMessage (persist turn)
